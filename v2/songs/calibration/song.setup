@@ -1,0 +1,9 @@
+// The offset-calibration tool, not a song: kick on every beat and nothing
+// else. It keeps the id "calibration", which is what puts it behind its own
+// button on the menu instead of on a card.
+{
+  "name": "Calibrate",
+  "bpm": 100,
+  "blurb": "Kick on every beat. Nothing else. Use it to dial in the offset slider."
+  // No "sounds" block, so it plays with the defaults from config.js.
+}

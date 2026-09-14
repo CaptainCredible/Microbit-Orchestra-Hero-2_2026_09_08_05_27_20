@@ -1,0 +1,15 @@
+// Paste the sound panel's "export settings" output over this file.
+//
+// A partial block works too, as here: anything left out uses the default from
+// config.js, so you only write down what you changed.
+const SOUND_DEFAULTS = {
+  keys: {
+    // Tighter and brighter than the default, to cut through the drums.
+    wave: "square",
+    decay: 0.28,
+    sustain: 0.08,
+    release: 0.5,
+    cutoff: 6000,
+    level: 0.55
+  }
+};

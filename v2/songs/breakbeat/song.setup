@@ -1,0 +1,7 @@
+// A short song.setup. See four-on-the-floor/song.setup for the annotated
+// reference, and sound-settings.txt beside this file for the sounds.
+{
+  "name": "Breakbeat",
+  "bpm": 140,
+  "blurb": "140 bpm. Syncopated - kick and snare collide, so you get X messages."
+}

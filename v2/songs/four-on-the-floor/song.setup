@@ -1,0 +1,49 @@
+// ============================================================================
+// song.setup - the reference copy. Everything here is explained; a real one
+// is four lines.
+//
+// This is JSON, with two relaxations so it can be written by a person:
+// // and /* */ comments are stripped, and a trailing comma before a } or a ]
+// is forgiven. Nothing else - if it will not parse, the menu says so rather
+// than quietly falling back to defaults.
+//
+// The folder it sits in looks like this. Every .mid is optional; a song with
+// nothing but Drums.mid is a song. Add the folder's name to songs/songs.json
+// or it will not appear on the menu - a browser cannot list a directory.
+//
+//   songs/four-on-the-floor/
+//     song.setup           <- this file: name, tempo, blurb
+//     sound-settings.txt   <- the synth settings, exported from the panel
+//     Drums.mid            C = kick, C# = hihat, D = snare, in ANY octave
+//     Bass.mid             whatever octave you like - the file is the voice
+//     Keys.mid
+//     Pads.mid
+//
+// Export one track at a time from Ableton, straight into the folder. The
+// filename is what decides which instrument plays it, so the channel and the
+// pitch range do not matter: a bass line written up at C4 is still the bass.
+// Case does not matter either - Pads.mid, pads.mid and PADS.MID all work.
+// ============================================================================
+{
+  // Shown on the song card. Falls back to the folder name if left out.
+  "name": "Four On The Floor",
+
+  // The tempo you set in Ableton. Get this right - it is the speed the song
+  // is played at, not a label.
+  //
+  // Ableton exports a clip's notes but no tempo, so any reader falls back to
+  // the MIDI standard's 120: a 70 bpm song would otherwise arrive timed as
+  // though it were 120 and play 1.7x too fast. This is what re-times it, and
+  // it also sets the tempo of the "1, 2, 3, 4" count-in and the editor's grid.
+  //
+  // If a .mid does carry a tempo, and it is something other than 120, the two
+  // disagree and the menu says so in red - one of them is wrong.
+  "bpm": 120,
+
+  // The line under the name on the song card. Optional.
+  "blurb": "120 bpm. Steady kick, backbeat snare, pads, bass and keys from bar one.",
+}
+
+// The sounds are NOT in this file. They live in sound-settings.txt beside it,
+// in exactly the format the sound panel exports, so tuning a song is: press d,
+// move sliders, press "export settings", paste over that file.

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Microbit Orchestra Hero 2</title>
+    <link rel="stylesheet" type="text/css" href="style.css">
+
+    <!-- libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+    <!-- Fetched with the page rather than lazily when the text is first
+         drawn, so the canvas does not paint a frame or two in the fallback
+         before the faces arrive. Relative paths, not /fonts/... - see the
+         note at the top of style.css.
+
+         A preload only warms the cache; it does not choose anything. The
+         title face is TITLE_FONT_FAMILY and the body face is
+         BODY_FONT_FAMILY, both in config.js, and these two should name
+         whatever those are set to. -->
+    <link rel="preload" as="font" type="font/ttf"
+          href="fonts/Nightmare_Hero_Normal.ttf" crossorigin>
+    <link rel="preload" as="font" type="font/ttf"
+          href="fonts/hankenround-Regular.ttf" crossorigin>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.0.4/Tone.js"></script>
+    <!-- @tonejs/midi spreads its exports onto window, giving us window.Midi -->
+    <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.28/build/Midi.js"></script>
+
+    <!-- app, in dependency order -->
+    <script src="config.js"></script>
+    <script src="ubitwebusb.js"></script>
+    <script src="midi-io.js"></script>
+    <script src="songs.js"></script>
+    <script src="audio.js"></script>
+    <script src="game.js"></script>
+    <script src="editor.js"></script>
+    <script src="scene3d.js"></script>
+    <script src="soundpanel.js"></script>
+    <script src="timing.js"></script>
+    <script src="scoreboard.js"></script>
+  </head>
+  <body>
+    <!-- holds the WEBGL canvas that sits behind the 2D one -->
+    <div id="bg3d"></div>
+    <script src="sketch.js"></script>
+  </body>
+</html>

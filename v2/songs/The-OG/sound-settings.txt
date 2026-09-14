@@ -1,0 +1,59 @@
+const SOUND_DEFAULTS = {
+  pads: {
+    wave: "sawtooth",
+    attack: 0.001,
+    decay: 0.5,
+    sustain: 0.41,
+    release: 1.95,
+    cutoff: 301.3508,
+    resonance: 3.7,
+    filterOctaves: 3.5,
+    filterAttack: 0.928,
+    filterDecay: 2.33,
+    filterSustain: 0.35,
+    filterRelease: 3.41,
+    level: 0.17,
+    reverb: 1,
+    vibratoRate: 1.2,
+    vibratoDepth: 0.51,
+    lfoDest: "filter",
+    lfoRate: 9.33,
+    lfoAmount: 0.69
+  },
+  bass: {
+    wave: "sawtooth",
+    attack: 0.01,
+    decay: 0.25,
+    sustain: 0.5,
+    release: 0.6,
+    cutoff: 700,
+    resonance: 2,
+    level: 0.46,
+    reverb: 0.05
+  },
+  keys: {
+    wave: "triangle",
+    attack: 0.006,
+    decay: 0.5,
+    sustain: 0.15,
+    release: 0.9,
+    cutoff: 4500,
+    resonance: 0.8,
+    level: 0.35,
+    reverb: 0.22
+  },
+  drums: {
+    level: 0.62,
+    reverb: 0.01
+  },
+  chorus: {
+    rate: 1.95,
+    depth: 0.17,
+    wet: 0.65
+  },
+  reverb: {
+    decay: 7.7,
+    preDelay: 0.02,
+    level: 2.4
+  }
+};

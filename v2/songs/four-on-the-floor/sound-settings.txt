@@ -1,0 +1,97 @@
+// ============================================================================
+// sound-settings.txt - the reference copy, annotated. A real one is whatever
+// the sound panel gave you, pasted straight in.
+//
+// How to make one:
+//   1. DEBUG_SOUND = true in config.js, or press "d" while the app is running
+//   2. pick this song and move the sliders until it sounds right
+//   3. press "export settings"
+//   4. paste the whole block over this file
+//
+// No reformatting and no picking bits out: what the panel exports is exactly
+// what is read back. The `const SOUND_DEFAULTS = ` around it and the trailing
+// semicolon are expected, and // comments and trailing commas are allowed on
+// top of that - so notes to yourself survive until the next export.
+//
+// Anything left out uses the default from config.js, so a file with nothing
+// but a `keys` block is perfectly good - see breakbeat/sound-settings.txt.
+// Each song starts from the defaults, never from whatever the song before it
+// left behind, so leaving something out really does mean "the normal one".
+//
+// The whole block is below with every setting in it, as a reference for what
+// can be set. These are the defaults, so as written this file changes nothing.
+// ============================================================================
+const SOUND_DEFAULTS = {
+  pads: {
+    wave: "pulse",              // see WAVEFORMS in config.js
+    attack: 0.9,                // seconds
+    decay: 0.5,
+    sustain: 0.7,               // 0..1
+    release: 2.6,
+    cutoff: 2085,               // Hz
+    resonance: 1,               // Q
+
+    // Per-voice filter envelope: every sounding pad note sweeps its own
+    // filter. filterOctaves is the switch as well as the amount - at 0 there
+    // is no sweep and the pads sound as they always have; above 0 each note
+    // opens from `cutoff` up by that many octaves and back.
+    //
+    // Not free: engaged, the pads cost about 60% more, which is roughly 27%
+    // of the whole mix. PAD_VOICES in config.js is the knob if a slow machine
+    // struggles, since the cost is per sounding voice.
+    filterOctaves: 0,           // 0 = off. 2-3 is an obvious sweep
+    filterAttack: 0.6,          // its own timing, not the volume's
+    filterDecay: 1.2,
+    filterSustain: 0.35,        // 0..1 of the way up
+    filterRelease: 2,
+
+    level: 0.5,
+    reverb: 0.35,               // 0 fully dry, 1 fully wet
+    vibratoRate: 4.5,           // Hz
+    vibratoDepth: 0.06,
+    lfoDest: "pwm",             // "pwm" (needs a pulse wave), "filter", "level"
+    lfoRate: 0.24,
+    lfoAmount: 0.35
+  },
+  bass: {
+    wave: "sawtooth",
+    attack: 0.01,
+    decay: 0.25,
+    sustain: 0.5,
+    release: 0.6,
+    cutoff: 700,
+    resonance: 2,
+    level: 0.8,
+    reverb: 0.12
+  },
+  keys: {
+    wave: "triangle",
+    attack: 0.006,
+    decay: 0.5,
+    sustain: 0.15,
+    release: 0.9,
+    cutoff: 4500,
+    resonance: 0.8,
+    level: 0.6,
+    reverb: 0.22
+  },
+  // The drums are synthesised and have no waveform or filter of their own -
+  // just how loud they are and how wet.
+  drums: {
+    level: 1,
+    reverb: 0.06
+  },
+  // Shared effects. The chorus is on the pads only; the reverb is shared by
+  // everything, and each instrument's own "reverb" above is how much of it
+  // that instrument sends.
+  chorus: {
+    rate: 0.35,
+    depth: 0.45,
+    wet: 0.5
+  },
+  reverb: {
+    decay: 4.2,                 // seconds of tail
+    preDelay: 0.02,
+    level: 3.5                  // makeup gain on the shared reverb's output
+  }
+};
