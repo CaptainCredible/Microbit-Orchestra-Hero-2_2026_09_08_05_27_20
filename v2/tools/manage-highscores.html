@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manage highscores</title>
+  <link rel="stylesheet" href="tools.css">
+  <script src="../config.js"></script>
+  <script src="../highscores.js"></script>
+</head>
+<body>
+<main class="wide">
+  <h1>Manage highscores</h1>
+  <p>For the admin: fix or remove scores, see who sent what, ban operators and answer requests to become one.</p>
+  <p id="config-warning" class="bad" hidden>Not connected to a highscore database yet (FIREBASE_CONFIG in config.js is empty).</p>
+
+  <form id="signin" class="row box">
+    <input id="email" type="email" placeholder="admin email" autocomplete="username" required>
+    <input id="password" type="password" placeholder="password" autocomplete="current-password" required>
+    <button type="submit" class="primary">sign in</button>
+  </form>
+  <div id="who-bar" class="bar box" hidden>
+    <span>signed in as <b id="who"></b></span>
+    <span style="flex:1"></span>
+    <button id="rebuild" type="button" hidden title="re-publish the list from every score in the database">rebuild published list</button>
+    <button id="signout" type="button">sign out</button>
+  </div>
+  <p id="status" class="note status"></p>
+
+  <div id="app" hidden>
+    <div class="tabs">
+      <button type="button" data-tab="scores" class="on">scores</button>
+      <button type="button" data-tab="operators">operators</button>
+      <button type="button" data-tab="requests">requests</button>
+    </div>
+    <div id="scores" class="panel"></div>
+    <div id="operators" class="panel" hidden></div>
+    <div id="requests" class="panel" hidden></div>
+  </div>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const PAGE = 200;
+  const state = {
+    tab: "scores",
+    entries: null,        // every score, once loaded
+    operators: [],
+    requests: [],
+    filter: "",
+    submitter: "",        // a uid, "(none)", or "" for everyone
+    shown: PAGE,
+    selected: new Set(),
+    editing: null
+  };
+
+  if (!Highscores.configured()) $("config-warning").hidden = false;
+
+  function el(tag, props, ...kids) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props || {})) {
+      if (value === undefined || value === null) continue;
+      if (key === "class") node.className = value;
+      else if (key === "data") Object.assign(node.dataset, value);
+      else node[key] = value;
+    }
+    for (const kid of kids.flat()) {
+      if (kid === null || kid === undefined || kid === false) continue;
+      node.append(kid.nodeType ? kid : String(kid));
+    }
+    return node;
+  }
+
+  function say(text, cls) {
+    $("status").textContent = text || "";
+    $("status").className = "note status " + (cls || "");
+  }
+
+  // Runs one change, saying what is happening and what went wrong. Resolves
+  // what the change gave back - or `true` when it gave back nothing - and
+  // `undefined` only when it failed, so callers can tell the two apart.
+  async function act(label, fn, done) {
+    say(label + "…");
+    try {
+      const result = await fn();
+      say(typeof done === "function" ? done(result) : (done || ""), "good");
+      return result === undefined ? true : result;
+    } catch (err) {
+      say(err.message, "bad");
+      return undefined;
+    }
+  }
+
+  function when(ts) {
+    const d = ts && typeof ts.toDate === "function" ? ts.toDate() : null;
+    return d ? d.toLocaleString() : "";
+  }
+
+  //////////////////////////////////////////////////////////////////
+  // signing in
+  //////////////////////////////////////////////////////////////////
+
+  $("signin").onsubmit = async (event) => {
+    event.preventDefault();
+    say("signing in…");
+    try { await Highscores.signIn($("email").value, $("password").value); }
+    catch (err) { say(err.message, "bad"); }
+  };
+  $("signout").onclick = () => Highscores.signOut();
+  $("rebuild").onclick = () => act("rebuilding the published list", () => Highscores.rebuildTable(),
+                                   n => `published list rebuilt - ${n} scores`);
+
+  let checking = null;
+  Highscores.onChange(async user => {
+    $("signin").hidden = !!user;
+    $("who-bar").hidden = !user;
+    $("app").hidden = true;
+    $("rebuild").hidden = true;
+    if (!user) { say(""); Object.assign(state, { entries: null, operators: [], requests: [], selected: new Set(), editing: null }); return; }
+    $("who").textContent = user.email;
+    const mine = checking = {};
+    say("checking this account…");
+    try {
+      const admin = await Highscores.probeAdmin();
+      if (checking !== mine) return;
+      if (!admin) {
+        say("This account is not the admin. Only the account named in the security rules can manage highscores.", "bad");
+        return;
+      }
+      await Highscores.ensureAdminOperator();
+      $("app").hidden = false;
+      $("rebuild").hidden = false;
+      say("");
+      await loadPeople();
+      showTab(state.tab);
+    } catch (err) {
+      if (checking === mine) say(err.message, "bad");
+    }
+  });
+  Highscores.start().then(ok => {
+    if (!ok && Highscores.configured()) say("could not load Firebase: " + Highscores.error, "bad");
+  });
+
+  //////////////////////////////////////////////////////////////////
+  // tabs
+  //////////////////////////////////////////////////////////////////
+
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+  function showTab(tab) {
+    state.tab = tab;
+    document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+    ["scores", "operators", "requests"].forEach(t => $(t).hidden = t !== tab);
+    if (tab === "scores") renderScores();
+    if (tab === "operators") renderOperators();
+    if (tab === "requests") renderRequests();
+  }
+
+  function updateRequestsTab() {
+    const pending = state.requests.filter(r => r.status === "pending").length;
+    document.querySelector('.tabs button[data-tab="requests"]').textContent = pending ? `requests (${pending})` : "requests";
+  }
+
+  async function loadPeople() {
+    const [operators, requests] = await Promise.all([Highscores.listOperators(), Highscores.listRequests()]);
+    state.operators = operators;
+    state.requests = requests;
+    updateRequestsTab();
+  }
+
+  function operatorEmail(uid) {
+    const op = state.operators.find(o => o.uid === uid);
+    if (op) return op.email;
+    const entry = state.entries && state.entries.find(e => e.submittedBy === uid);
+    return entry ? entry.submittedEmail || uid : uid;
+  }
+
+  //////////////////////////////////////////////////////////////////
+  // scores
+  //////////////////////////////////////////////////////////////////
+
+  async function loadScores() {
+    const entries = await act("loading every score", () => Highscores.listEntries(), list => `${list.length} scores loaded`);
+    if (!entries) return;
+    state.entries = entries;
+    state.selected = new Set();
+    state.editing = null;
+    renderScores();
+  }
+
+  function renderScores() {
+    const panel = $("scores");
+    panel.replaceChildren();
+
+    const submitters = new Map();
+    for (const e of state.entries || []) {
+      if (e.submittedBy) submitters.set(e.submittedBy, e.submittedEmail || e.submittedBy);
+    }
+    const select = el("select", { id: "submitter", onchange: ev => { state.submitter = ev.target.value; state.shown = PAGE; renderScoreRows(); } },
+      el("option", { value: "", textContent: "sent by anyone" }),
+      el("option", { value: "(none)", textContent: "no sender recorded" }),
+      [...submitters].sort((a, b) => a[1].localeCompare(b[1])).map(([uid, email]) => el("option", { value: uid, textContent: email })));
+    select.value = state.submitter;
+
+    panel.append(el("div", { class: "bar" },
+      el("button", { id: "load-scores", type: "button", class: state.entries ? "" : "primary",
+                     textContent: state.entries ? "reload scores" : "load scores", onclick: loadScores }),
+      el("input", { id: "filter", type: "search", placeholder: "filter by name, place or email", value: state.filter,
+                    oninput: ev => { state.filter = ev.target.value; state.shown = PAGE; renderScoreRows(); } }),
+      select,
+      el("button", { id: "delete-selected", type: "button", class: "danger", onclick: deleteSelected }),
+      el("span", { id: "score-count", class: "note" })));
+
+    if (!state.entries) {
+      panel.append(el("p", { class: "note" },
+        "Loading reads every score once, and each counts against the free plan's 50,000 reads a day " +
+        "(about 1,300 now) - so it waits until you ask."));
+      return;
+    }
+    panel.append(el("div", { id: "score-table", class: "table-wrap" }));
+    renderScoreRows();
+  }
+
+  function filteredScores() {
+    const ranked = Highscores.rank(state.entries.map(e => Object.assign(Highscores.compact(e.id, e), { raw: e })));
+    const q = state.filter.trim().toLowerCase();
+    return ranked.filter(item => {
+      const e = item.raw;
+      if (state.submitter === "(none)" && e.submittedBy) return false;
+      if (state.submitter && state.submitter !== "(none)" && e.submittedBy !== state.submitter) return false;
+      if (!q) return true;
+      return `${e.name} ${e.location} ${e.submittedEmail || ""}`.toLowerCase().includes(q);
+    });
+  }
+
+  function renderScoreRows() {
+    const wrap = $("score-table");
+    if (!wrap) return;
+    const items = filteredScores();
+    $("score-count").textContent = `${items.length} of ${state.entries.length} scores`;
+    updateDeleteSelected();
+
+    const table = el("table", null,
+      el("thead", null, el("tr", null,
+        el("th", null, el("input", { type: "checkbox", title: "select everything shown",
+          onchange: ev => { items.slice(0, state.shown).forEach(i => ev.target.checked ? state.selected.add(i.id) : state.selected.delete(i.id)); renderScoreRows(); } })),
+        el("th", { class: "n" }, "#"), el("th", null, "★"), el("th", null, "name"), el("th", null, "place"),
+        el("th", null, "date"), el("th", { class: "n" }, "score"), el("th", null, "source"), el("th", null, "sent by"), el("th", null, ""))),
+      el("tbody", null, items.slice(0, state.shown).map(scoreRow)));
+    wrap.replaceChildren(table);
+
+    if (items.length > state.shown) {
+      wrap.append(el("div", { class: "bar", style: "margin-top:8px" },
+        el("button", { type: "button", textContent: `show ${Math.min(PAGE, items.length - state.shown)} more`,
+                       onclick: () => { state.shown += PAGE; renderScoreRows(); } }),
+        el("span", { class: "note", textContent: `showing ${state.shown} of ${items.length}` })));
+    }
+  }
+
+  function scoreRow(item) {
+    const e = item.raw;
+    const check = el("input", { type: "checkbox", checked: state.selected.has(e.id),
+      onchange: ev => { ev.target.checked ? state.selected.add(e.id) : state.selected.delete(e.id); updateDeleteSelected(); } });
+    const sender = el("td", { class: e.submittedEmail ? "" : "dim" }, e.submittedEmail || "—");
+
+    if (state.editing === e.id) {
+      const name = el("input", { value: e.name, maxLength: 60 });
+      const place = el("input", { value: e.location, maxLength: 80 });
+      const score = el("input", { type: "number", step: 1, value: e.score, style: "width:90px" });
+      const bonus = el("input", { type: "checkbox", checked: !!e.bonus, title: "bonus star" });
+      return el("tr", { class: "editing", data: { id: e.id } },
+        el("td", null, check), el("td", { class: "n" }, item.position), el("td", null, bonus),
+        el("td", null, name), el("td", null, place), el("td", { class: "dim" }, item.date),
+        el("td", { class: "n" }, score), el("td", { class: "dim" }, e.source), sender,
+        el("td", { class: "actions" },
+          el("button", { type: "button", class: "primary", textContent: "save",
+                         onclick: () => saveEdit(e.id, { name: name.value, location: place.value, score: score.value, bonus: bonus.checked }) }),
+          el("button", { type: "button", textContent: "cancel", onclick: () => { state.editing = null; renderScoreRows(); } })));
+    }
+
+    return el("tr", { data: { id: e.id } },
+      el("td", null, check), el("td", { class: "n" }, item.position), el("td", { class: "star" }, e.bonus ? "★" : ""),
+      el("td", null, e.name), el("td", null, e.location), el("td", { class: "dim" }, item.date),
+      el("td", { class: "n" }, e.score), el("td", { class: "dim" }, e.source), sender,
+      el("td", { class: "actions" },
+        el("button", { type: "button", textContent: "edit", onclick: () => { state.editing = e.id; renderScoreRows(); } }),
+        el("button", { type: "button", class: "danger", textContent: "delete",
+                       onclick: () => deleteIds([e.id], `Delete ${e.name || "this score"} (${e.score})?`) })));
+  }
+
+  async function saveEdit(id, patch) {
+    const fresh = await act("saving", () => Highscores.updateEntry(id, patch), "saved - the published list is updated");
+    if (!fresh) return;
+    state.entries = state.entries.map(e => e.id === id ? fresh : e);
+    state.editing = null;
+    renderScoreRows();
+  }
+
+  function updateDeleteSelected() {
+    const button = $("delete-selected");
+    if (!button) return;
+    button.textContent = `delete selected (${state.selected.size})`;
+    button.disabled = state.selected.size === 0;
+  }
+
+  function deleteSelected() {
+    const ids = [...state.selected];
+    deleteIds(ids, `Delete ${ids.length} score${ids.length === 1 ? "" : "s"}? This cannot be undone.`);
+  }
+
+  async function deleteIds(ids, question) {
+    if (!ids.length || !confirm(question)) return;
+    const n = await act(`deleting ${ids.length}`, () => Highscores.deleteEntries(ids),
+                        n => `deleted ${n} - the published list is updated`);
+    if (n === undefined) return;
+    const gone = new Set(ids);
+    state.entries = (state.entries || []).filter(e => !gone.has(e.id));
+    ids.forEach(id => state.selected.delete(id));
+    showTab(state.tab);
+  }
+
+  //////////////////////////////////////////////////////////////////
+  // operators
+  //////////////////////////////////////////////////////////////////
+
+  function renderOperators() {
+    const panel = $("operators");
+    panel.replaceChildren();
+
+    const counts = new Map();
+    for (const e of state.entries || []) {
+      const key = e.submittedBy || "(none)";
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    // Everyone with an operators entry, plus anyone who has sent scores
+    // without one - there should be none, but they would be worth seeing.
+    const rows = state.operators.map(o => Object.assign({}, o));
+    for (const uid of counts.keys()) {
+      if (uid !== "(none)" && !rows.some(r => r.uid === uid)) {
+        rows.push({ uid, email: operatorEmail(uid), name: null, organisation: null, status: "no entry" });
+      }
+    }
+    rows.sort((a, b) => (a.status === "banned") - (b.status === "banned") || String(a.email).localeCompare(String(b.email)));
+
+    panel.append(el("div", { class: "bar" },
+      el("button", { type: "button", textContent: "reload", onclick: async () => { await act("loading operators", loadPeople); renderOperators(); } }),
+      el("span", { class: "note", textContent: state.entries ? "" : "Load the scores (scores tab) to see how many each operator has sent." })));
+
+    const me = Highscores.user ? Highscores.user.uid : null;
+    panel.append(el("div", { class: "table-wrap" }, el("table", null,
+      el("thead", null, el("tr", null, ["email", "name", "organisation", "status", "scores", ""].map((h, i) => el("th", { class: i === 4 ? "n" : "" }, h)))),
+      el("tbody", null, rows.map(o => {
+        const n = counts.get(o.uid) || 0;
+        const statusClass = o.status === "active" ? "good" : o.status === "banned" ? "bad" : "warn";
+        const actions = el("td", { class: "actions" });
+        if (o.uid !== me && o.status === "active") {
+          actions.append(el("button", { type: "button", class: "danger", textContent: "ban",
+            onclick: async () => {
+              if (!confirm(`Ban ${o.email}? They will not be able to send scores. Their existing scores stay unless you delete them.`)) return;
+              if (await act("banning", () => Highscores.setOperatorStatus(o.uid, "banned"), `${o.email} is banned`) !== undefined) { await loadPeople(); renderOperators(); }
+            } }));
+        }
+        if (o.uid !== me && o.status !== "active") {
+          actions.append(el("button", { type: "button", textContent: o.status === "banned" ? "unban" : "make operator",
+            onclick: async () => {
+              if (await act("updating", () => Highscores.setOperatorStatus(o.uid, "active", { email: o.email }), `${o.email} is an operator`) !== undefined) { await loadPeople(); renderOperators(); }
+            } }));
+        }
+        if (state.entries && n) {
+          actions.append(
+            el("button", { type: "button", textContent: "show scores",
+              onclick: () => { state.submitter = o.uid; state.filter = ""; state.shown = PAGE; showTab("scores"); } }),
+            el("button", { type: "button", class: "danger", textContent: `delete their ${n} score${n === 1 ? "" : "s"}`,
+              onclick: () => deleteIds(state.entries.filter(e => e.submittedBy === o.uid).map(e => e.id),
+                                       `Delete all ${n} scores sent by ${o.email}? This cannot be undone.`) }));
+        }
+        return el("tr", { data: { uid: o.uid } },
+          el("td", null, o.email || o.uid, o.uid === me ? el("span", { class: "dim", textContent: "  (you)" }) : null),
+          el("td", null, o.name || ""), el("td", null, o.organisation || ""),
+          el("td", null, el("span", { class: "badge " + statusClass, textContent: o.status })),
+          el("td", { class: "n" }, state.entries ? n : "–"), actions);
+      })))));
+
+    if (counts.get("(none)")) {
+      panel.append(el("p", { class: "note", textContent: `${counts.get("(none)")} scores have no sender recorded - those from before senders were recorded.` }));
+    }
+  }
+
+  //////////////////////////////////////////////////////////////////
+  // requests
+  //////////////////////////////////////////////////////////////////
+
+  function renderRequests() {
+    const panel = $("requests");
+    panel.replaceChildren();
+    panel.append(el("div", { class: "bar" },
+      el("button", { type: "button", textContent: "reload", onclick: async () => { await act("loading requests", loadPeople); renderRequests(); } }),
+      el("span", { class: "note", textContent: "People ask on tools/request-operator.html." })));
+
+    const list = state.requests.slice().sort((a, b) =>
+      (a.status !== "pending") - (b.status !== "pending") ||
+      ((b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0) - (a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0)));
+    if (!list.length) {
+      panel.append(el("p", { class: "note", textContent: "No requests." }));
+      return;
+    }
+
+    panel.append(el("div", { class: "table-wrap" }, el("table", null,
+      el("thead", null, el("tr", null, ["sent", "email", "name", "organisation", "message", "status", ""].map(h => el("th", null, h)))),
+      el("tbody", null, list.map(r => {
+        const actions = el("td", { class: "actions" });
+        const reload = async () => { await loadPeople(); renderRequests(); };
+        if (r.status === "pending") {
+          actions.append(
+            el("button", { type: "button", class: "primary", textContent: "approve",
+              onclick: async () => { if (await act("approving", () => Highscores.approveRequest(r.uid), `${r.email} is now an operator`) !== undefined) await reload(); } }),
+            el("button", { type: "button", class: "danger", textContent: "turn down",
+              onclick: async () => {
+                if (!confirm(`Turn down ${r.email}? They will not be able to ask again unless you delete the request.`)) return;
+                if (await act("turning down", () => Highscores.rejectRequest(r.uid), "turned down") !== undefined) await reload();
+              } }));
+        }
+        actions.append(el("button", { type: "button", textContent: "delete",
+          title: "remove the request - they can then ask again",
+          onclick: async () => {
+            if (!confirm(`Delete the request from ${r.email}?`)) return;
+            if (await act("deleting", () => Highscores.deleteRequest(r.uid), "request deleted") !== undefined) await reload();
+          } }));
+        return el("tr", { data: { uid: r.uid } },
+          el("td", { class: "dim" }, when(r.createdAt)),
+          el("td", null, r.email, " ", el("span", { class: "badge " + (r.emailVerified ? "good" : "warn"), textContent: r.emailVerified ? "verified" : "not verified" })),
+          el("td", null, r.name), el("td", null, r.organisation),
+          el("td", { class: "message" }, r.message),
+          el("td", null, el("span", { class: "badge " + (r.status === "pending" ? "warn" : "bad"), textContent: r.status })),
+          actions);
+      })))));
+  }
+</script>
+</body>
+</html>

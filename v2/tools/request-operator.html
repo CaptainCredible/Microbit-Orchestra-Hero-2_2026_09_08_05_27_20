@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Become a highscore operator</title>
+  <link rel="stylesheet" href="tools.css">
+  <script src="../config.js"></script>
+  <script src="../highscores.js"></script>
+</head>
+<body>
+<main>
+  <h1>Become a highscore operator</h1>
+  <p>Operators run micro:bit Orchestra Hero at their own school, library or event, and send the
+     players' scores to the global highscore list. Ask for access here. Once the admin has approved it,
+     sign in on the game's <b>highscores</b> page with the same email and password.</p>
+  <p id="config-warning" class="bad" hidden>This page is not connected to a highscore database yet (FIREBASE_CONFIG in config.js is empty).</p>
+
+  <h2>1. Your account</h2>
+  <div id="signed-out">
+    <div class="tabs">
+      <button id="mode-new" class="on" type="button">new account</button>
+      <button id="mode-existing" type="button">I already have an account</button>
+    </div>
+    <div class="box">
+      <form id="account-form" class="row">
+        <input id="email" type="email" placeholder="email" autocomplete="username" required>
+        <input id="password" type="password" placeholder="password (6+ characters)" autocomplete="new-password" required>
+        <button id="account-go" type="submit" class="primary">create account</button>
+      </form>
+    </div>
+  </div>
+  <div id="signed-in" class="box" hidden>
+    <p>Signed in as <b id="me"></b> <span id="verified" class="badge"></span></p>
+    <div class="bar">
+      <button id="resend" type="button">send the verification email again</button>
+      <button id="recheck" type="button">I have clicked the link</button>
+      <button id="signout" type="button">sign out</button>
+    </div>
+  </div>
+  <p id="account-status" class="note status"></p>
+
+  <section id="request-section" hidden>
+    <h2>2. Your request</h2>
+    <div id="state" class="box note">checking…</div>
+    <form id="request-form" class="stack" hidden>
+      <label>Your name
+        <input id="name" maxlength="80" required>
+      </label>
+      <label>School, library or organisation
+        <input id="organisation" maxlength="120">
+      </label>
+      <label>Where and when you will run the game, and anything else the admin should know
+        <textarea id="message" maxlength="1000" rows="5"></textarea>
+      </label>
+      <div class="bar"><button id="request-go" type="submit" class="primary">send request</button></div>
+    </form>
+    <p id="request-status" class="note status"></p>
+  </section>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let mode = "new";
+
+  if (!Highscores.configured()) $("config-warning").hidden = false;
+
+  function say(id, text, cls) {
+    $(id).textContent = text || "";
+    $(id).className = "note status " + (cls || "");
+  }
+
+  function setMode(next) {
+    mode = next;
+    $("mode-new").classList.toggle("on", next === "new");
+    $("mode-existing").classList.toggle("on", next !== "new");
+    $("account-go").textContent = next === "new" ? "create account" : "sign in";
+    $("password").setAttribute("autocomplete", next === "new" ? "new-password" : "current-password");
+    say("account-status", "");
+  }
+  $("mode-new").onclick = () => setMode("new");
+  $("mode-existing").onclick = () => setMode("existing");
+
+  function showVerified(verified) {
+    $("verified").textContent = verified ? "email verified" : "email not verified yet";
+    $("verified").className = "badge " + (verified ? "good" : "warn");
+    $("resend").hidden = !!verified;
+    $("recheck").hidden = !!verified;
+  }
+
+  Highscores.onChange(user => {
+    $("signed-out").hidden = !!user;
+    $("signed-in").hidden = !user;
+    $("request-section").hidden = !user;
+    if (!user) return;
+    $("me").textContent = user.email;
+    showVerified(user.emailVerified);
+    refreshState();
+  });
+  Highscores.start().then(ok => {
+    if (!ok && Highscores.configured()) say("account-status", "could not load Firebase: " + Highscores.error, "bad");
+  });
+
+  $("account-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const email = $("email").value.trim();
+    $("account-go").disabled = true;
+    say("account-status", mode === "new" ? "creating your account…" : "signing in…");
+    try {
+      if (mode === "new") {
+        await Highscores.createAccount(email, $("password").value);
+        say("account-status", `Account made. A verification email is on its way to ${email} - the link in it confirms the address is yours.`, "good");
+      } else {
+        await Highscores.signIn(email, $("password").value);
+        say("account-status", "");
+      }
+    } catch (err) {
+      say("account-status", err.message, "bad");
+    } finally {
+      $("account-go").disabled = false;
+    }
+  };
+
+  $("resend").onclick = async () => {
+    try { await Highscores.sendVerification(); say("account-status", "verification email sent", "good"); }
+    catch (err) { say("account-status", err.message, "bad"); }
+  };
+
+  $("recheck").onclick = async () => {
+    try {
+      const user = await Highscores.refreshUser();
+      showVerified(user.emailVerified);
+      say("account-status", user.emailVerified ? "email verified - thank you" : "not verified yet - use the link in the email", user.emailVerified ? "good" : "warn");
+    } catch (err) {
+      say("account-status", err.message, "bad");
+    }
+  };
+
+  $("signout").onclick = () => { say("account-status", ""); say("request-status", ""); Highscores.signOut(); };
+
+  let refreshing = null;
+  async function refreshState() {
+    const state = $("state");
+    const form = $("request-form");
+    state.className = "box note";
+    state.textContent = "checking…";
+    const mine = refreshing = {};
+    try {
+      const st = await Highscores.myStatus();
+      if (refreshing !== mine) return;
+      form.hidden = true;
+      if (st.admin) {
+        state.textContent = "This is the admin account - it can already do everything.";
+      } else if (st.operator === "active") {
+        state.className = "box good";
+        state.textContent = "You are an operator. Sign in on the game's highscores page with this email and password to send scores.";
+      } else if (st.operator === "banned") {
+        state.className = "box bad";
+        state.textContent = "This account's operator access has been withdrawn. Contact the admin if you think that is a mistake.";
+      } else if (st.request && st.request.status === "rejected") {
+        state.className = "box bad";
+        state.textContent = "This request was turned down. Contact the admin directly if you would like to ask again.";
+      } else if (st.request) {
+        state.className = "box warn";
+        state.textContent = "Your request is waiting for the admin. You can change it below.";
+        $("name").value = st.request.name || "";
+        $("organisation").value = st.request.organisation || "";
+        $("message").value = st.request.message || "";
+        $("request-go").textContent = "update request";
+        form.hidden = false;
+        // Verified since it was sent: say so on the request, so the admin sees it.
+        if (Highscores.user && Highscores.user.emailVerified && !st.request.emailVerified) {
+          await Highscores.submitRequest(st.request);
+        }
+      } else {
+        state.textContent = "No request sent from this account yet.";
+        $("request-go").textContent = "send request";
+        form.hidden = false;
+      }
+    } catch (err) {
+      if (refreshing === mine) state.textContent = "could not check: " + err.message;
+    }
+  }
+
+  $("request-form").onsubmit = async (event) => {
+    event.preventDefault();
+    $("request-go").disabled = true;
+    say("request-status", "sending…");
+    try {
+      await Highscores.submitRequest({
+        name: $("name").value,
+        organisation: $("organisation").value,
+        message: $("message").value
+      });
+      say("request-status", "Sent. The admin will look at it - come back to this page to see the answer.", "good");
+      refreshState();
+    } catch (err) {
+      say("request-status", err.message, "bad");
+    } finally {
+      $("request-go").disabled = false;
+    }
+  };
+</script>
+</body>
+</html>

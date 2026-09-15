@@ -1,0 +1,204 @@
+rules_version = '2';
+
+// Security rules for the highscore database.
+//
+// Paste this whole file into Firebase console > Firestore Database > Rules and
+// press Publish. The full setup is in the README, "The highscore database".
+//
+// Three kinds of account:
+//
+//   the admin    named below, and nowhere else. Can do everything: edit and
+//                delete scores, approve and ban operators.
+//   operators    accounts the admin has approved (operators/{uid}, status
+//                'active'). Can add scores from the game - signed with who
+//                they are - and nothing else.
+//   anyone else  can read the published list, and can ask to be an operator
+//                (operatorRequests/{uid}). That is all.
+//
+// The Firebase console itself ignores these rules, so editing by hand there
+// always works.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // The admin account. Its UID is in Firebase console > Authentication >
+    // Users. Keep the quotes: ['uid'], or ['first-uid', 'second-uid'] for two.
+    function isAdmin() {
+      return request.auth != null
+          && request.auth.uid in ['6rPGVnnM6pRTovad8RzT6ks3vFv1'];
+    }
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function operatorPath() {
+      return /databases/$(database)/documents/operators/$(request.auth.uid);
+    }
+
+    // Approved and not banned. Read from the database on every write, so a
+    // ban takes effect on the very next one.
+    function isActiveOperator() {
+      return isAdmin()
+          || (signedIn() && exists(operatorPath()) && get(operatorPath()).data.status == 'active');
+    }
+
+    function nullOrString(value, max) {
+      return value == null || (value is string && value.size() <= max);
+    }
+
+    // The shape of a score. submittedBy and submittedEmail are allowed but not
+    // required here, because scores from before they existed have neither.
+    function validEntry(d) {
+      return d.keys().hasAll(['name', 'location', 'score', 'bonus', 'date', 'song',
+                              'player', 'robot', 'submission', 'source', 'legacyRank'])
+          && d.keys().hasOnly(['name', 'location', 'score', 'bonus', 'date', 'song',
+                               'player', 'robot', 'submission', 'source', 'legacyRank',
+                               'submittedBy', 'submittedEmail'])
+          && d.name is string && d.name.size() <= 60
+          && d.location is string && d.location.size() <= 80
+          && d.score is int && d.score > -1000000 && d.score < 1000000
+          && d.bonus is bool
+          && (d.date == null || d.date is timestamp)
+          && nullOrString(d.song, 80)
+          && (d.player == null || (d.player is int && d.player >= 0 && d.player < 100))
+          && nullOrString(d.robot, 20)
+          && nullOrString(d.submission, 80)
+          && d.source in ['game', 'legacy']
+          && (d.legacyRank == null || d.legacyRank is int)
+          && (!('submittedBy' in d) || nullOrString(d.submittedBy, 128))
+          && (!('submittedEmail' in d) || nullOrString(d.submittedEmail, 254));
+    }
+
+    // A score as an operator sends it: from the game, and signed with their own
+    // account and email - checked against their sign-in, so it cannot be
+    // anybody else's. That is what makes a ban mean something.
+    function signedByMe(d) {
+      return d.source == 'game'
+          && d.legacyRank == null
+          && d.submittedBy == request.auth.uid
+          && d.submittedEmail == request.auth.token.email;
+    }
+
+    // Every result. Operators may look up only their own - which is how the
+    // game recognises a board it has already sent - and never list them.
+    match /highscores/{entry} {
+      allow get: if isAdmin()
+          || (isActiveOperator()
+              && (resource == null || resource.data.get('submittedBy', null) == request.auth.uid));
+      allow list: if isAdmin();
+      allow create: if validEntry(request.resource.data)
+          && (isAdmin() || (isActiveOperator() && signedByMe(request.resource.data)));
+      // An operator's only update is the game re-sending a board whose answer
+      // was lost: the very same document, unchanged.
+      allow update: if validEntry(request.resource.data)
+          && (isAdmin()
+              || (isActiveOperator()
+                  && resource.data.get('submittedBy', null) == request.auth.uid
+                  && request.resource.data == resource.data));
+      allow delete: if isAdmin();
+    }
+
+    // The published, ranked list, as one document. Public to read.
+    //
+    // Operators have to add to it, and the rules cannot parse JSON, so an
+    // operator's write is checked as text instead: everything already on the
+    // list must stay exactly as it was, and the only change allowed is adding
+    // to the end - a board at a time. So nothing already published can be
+    // changed, reordered or removed by an operator. Every write also records
+    // who made it. If one is ever abused, "rebuild published list" in the
+    // management tool puts it back together from the scores themselves.
+    function validTable(d) {
+      return d.keys().hasOnly(['json', 'count', 'updated', 'updatedBy'])
+          && d.json is string
+          && d.count is int
+          && d.updated == request.time
+          && d.updatedBy == request.auth.uid;
+    }
+
+    // The list is written as `[entry,entry,...]`. Appending keeps all of the
+    // old text but its closing bracket exactly where it was, and still ends
+    // with one. Measured against a 1,500-score list: a few milliseconds.
+    function appendedTo(before, after) {
+      return after.json.size() >= before.json.size()
+          && after.json.size() <= before.json.size() + 20000
+          && after.json[0:before.json.size() - 1] == before.json[0:before.json.size() - 1]
+          && after.json[after.json.size() - 1:after.json.size()] == ']'
+          && after.count >= before.count
+          && after.count <= before.count + 32;
+    }
+
+    match /highscores_meta/{doc} {
+      allow read: if true;
+      allow create: if isAdmin() && validTable(request.resource.data);
+      allow update: if validTable(request.resource.data)
+          && (isAdmin()
+              || (isActiveOperator() && appendedTo(resource.data, request.resource.data)));
+      allow delete: if isAdmin();
+    }
+
+    // Operators, and whether they are active or banned. Only the admin writes
+    // these; an account can read its own, so the game can say where it stands.
+    function validOperator(d) {
+      return d.keys().hasAll(['email', 'name', 'organisation', 'status', 'note', 'updatedAt'])
+          && d.keys().hasOnly(['email', 'name', 'organisation', 'status', 'note', 'updatedAt'])
+          && d.email is string && d.email.size() <= 254
+          && nullOrString(d.name, 80)
+          && nullOrString(d.organisation, 120)
+          && nullOrString(d.note, 500)
+          && d.status in ['active', 'banned']
+          && d.updatedAt == request.time;
+    }
+
+    match /operators/{uid} {
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && validOperator(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Requests to become an operator: one per account, filed under its own UID.
+    function validRequest(d) {
+      return d.keys().hasAll(['email', 'emailVerified', 'name', 'organisation', 'message',
+                              'status', 'createdAt', 'updatedAt'])
+          && d.keys().hasOnly(['email', 'emailVerified', 'name', 'organisation', 'message',
+                               'status', 'createdAt', 'updatedAt'])
+          && d.email is string && d.email.size() <= 254
+          && d.emailVerified is bool
+          && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+          && d.organisation is string && d.organisation.size() <= 120
+          && d.message is string && d.message.size() <= 1000
+          && d.status in ['pending', 'rejected']
+          && d.createdAt is timestamp
+          && d.updatedAt == request.time;
+    }
+
+    // What the person asking may write: always pending, and their email and
+    // whether it is verified exactly as their sign-in says.
+    function ownRequest(d) {
+      return d.status == 'pending'
+          && d.email == request.auth.token.email
+          && d.emailVerified == request.auth.token.email_verified;
+    }
+
+    match /operatorRequests/{uid} {
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow list: if isAdmin();
+      allow create: if signedIn() && request.auth.uid == uid
+          && validRequest(request.resource.data)
+          && ownRequest(request.resource.data)
+          && request.resource.data.createdAt == request.time;
+      // The person may update it while it is pending; once turned down it
+      // stays turned down unless the admin deletes it. The admin may only
+      // change its status.
+      allow update: if validRequest(request.resource.data)
+          && ((signedIn() && request.auth.uid == uid
+               && resource.data.status == 'pending'
+               && ownRequest(request.resource.data)
+               && request.resource.data.createdAt == resource.data.createdAt)
+              || (isAdmin()
+                  && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])));
+      allow delete: if isAdmin();
+    }
+  }
+}

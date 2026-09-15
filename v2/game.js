@@ -207,6 +207,9 @@ const Embers = {
   rect: null,      // where the panel was when the burst started
   startedAt: 0,
   last: 0,
+  rate: 0,         // embers a second for a steady glow - see glow()
+  glowRect: null,
+  carry: 0,        // the fraction of an ember owed from the last frame
 
   // `rect` is the panel's box in canvas pixels: { x, y, w, h }. Passing it in
   // rather than measuring here keeps this file free of the DOM - it draws,
@@ -224,32 +227,57 @@ const Embers = {
     this.parts.length = 0;
     this.pending = 0;
     this.rect = null;
+    this.rate = 0;
+    this.glowRect = null;
+    this.carry = 0;
   },
 
-  running() { return this.pending > 0 || this.parts.length > 0; },
+  // A steady trickle rather than a burst, for a panel that stays up - the
+  // highscores list. Called every frame with the panel's box as it is now, so
+  // the fire follows the panel when the window is resized. A burst already
+  // under way carries on alongside it.
+  glow(rect, rate) {
+    if (!rect || rect.w <= 0 || rect.h <= 0) { this.rate = 0; this.glowRect = null; return; }
+    this.glowRect = rect;
+    this.rate = rate;
+  },
+
+  running() { return this.pending > 0 || this.parts.length > 0 || this.rate > 0; },
 
   // One ember, born somewhere on the panel's perimeter and heading straight
   // out from the edge it was born on, give or take EMBER_SPREAD.
-  spawn() {
-    const r = this.rect;
-    const perimeter = 2 * (r.w + r.h);
+  //
+  // `withBottom` false leaves the bottom edge out. That is for the steady
+  // glow: embers rise, so one born on the bottom edge floats straight back up
+  // behind the panel - which is opaque - and is never seen at all.
+  spawn(r, speedRange, sizeRange, withBottom) {
+    const perimeter = withBottom ? 2 * (r.w + r.h) : r.w + 2 * r.h;
     let along = Math.random() * perimeter;
     let x, y, nx, ny;
 
-    if (along < r.w)                { x = r.x + along;             y = r.y;        nx = 0;  ny = -1; }
-    else if ((along -= r.w) < r.h)  { x = r.x + r.w;               y = r.y + along; nx = 1;  ny = 0; }
-    else if ((along -= r.h) < r.w)  { x = r.x + r.w - along;       y = r.y + r.h;  nx = 0;  ny = 1; }
-    else                            { x = r.x;  y = r.y + r.h - (along - r.w);     nx = -1; ny = 0; }
+    if (along < r.w) {
+      x = r.x + along; y = r.y; nx = 0; ny = -1;                       // top
+    } else if ((along -= r.w) < r.h) {
+      x = r.x + r.w; y = r.y + along; nx = 1; ny = 0;                  // right
+    } else {
+      along -= r.h;
+      if (withBottom && along < r.w) {
+        x = r.x + r.w - along; y = r.y + r.h; nx = 0; ny = 1;          // bottom
+      } else {
+        if (withBottom) along -= r.w;
+        x = r.x; y = r.y + r.h - along; nx = -1; ny = 0;               // left
+      }
+    }
 
     const spread = (Math.random() * 2 - 1) * EMBER_SPREAD;
     const cos = Math.cos(spread), sin = Math.sin(spread);
-    const speed = EMBER_SPEED[0] + Math.random() * (EMBER_SPEED[1] - EMBER_SPEED[0]);
+    const speed = speedRange[0] + Math.random() * (speedRange[1] - speedRange[0]);
 
     this.parts.push({
       x, y,
       vx: (nx * cos - ny * sin) * speed,
       vy: (nx * sin + ny * cos) * speed,
-      size: EMBER_SIZE[0] + Math.random() * (EMBER_SIZE[1] - EMBER_SIZE[0]),
+      size: sizeRange[0] + Math.random() * (sizeRange[1] - sizeRange[0]),
       age: 0,
       life: EMBER_LIFE[0] + Math.random() * (EMBER_LIFE[1] - EMBER_LIFE[0]),
       flow: Math.random()          // its own place in the colour cycle
@@ -269,8 +297,18 @@ const Embers = {
     // pop of confetti.
     if (this.pending > 0 && this.rect) {
       const due = Math.ceil(EMBER_COUNT * (dt / EMBER_BURST_SECONDS));
-      for (let i = 0; i < Math.min(due, this.pending); i++) this.spawn();
+      for (let i = 0; i < Math.min(due, this.pending); i++) this.spawn(this.rect, EMBER_SPEED, EMBER_SIZE, true);
       this.pending -= Math.min(due, this.pending);
+    }
+
+    // The glow owes rate * dt embers a frame - a fraction, most frames - so
+    // the remainder is carried over rather than rounded away, which would
+    // either lose the fire at 60fps or double it at 30.
+    if (this.rate > 0 && this.glowRect) {
+      this.carry += this.rate * dt;
+      const due = Math.floor(this.carry);
+      this.carry -= due;
+      for (let i = 0; i < due; i++) this.spawn(this.glowRect, EMBER_GLOW_SPEED, EMBER_GLOW_SIZE, false);
     }
 
     const palette = TITLE_PALETTES[TITLE_PALETTE] || TITLE_PALETTES.rainbow;

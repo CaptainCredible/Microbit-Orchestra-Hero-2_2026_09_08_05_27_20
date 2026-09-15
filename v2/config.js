@@ -261,26 +261,32 @@ const SCOREBOARD_PLAYERS = 16;
 const ROBOT_NAMES = ["Ali", "Eir", "Ina", "Una", "Per", "Alf", "Ada", "Ela",
                      "Eli", "Mor", "Oda", "Ask", "Kai", "Ida", "Kim", "Eva"];
 
-// ---- saving scores to a Google Sheet ---------------------------------------
+// ---- the highscore database ------------------------------------------------
 //
-// "submit scores" sends the board to a Google Sheet through a small Apps Script
-// web app: free, no card, no server to run. The script is
-// scores-backend/Code.gs, and the setup steps are in the README under "Saving
-// scores to a Google Sheet".
+// Scores go to Cloud Firestore on Firebase's free Spark plan - no card, and no
+// way to be billed. The setup steps are in the README under "The highscore
+// database", and the security rules to paste in are firebase/firestore.rules.
 //
-// Every submission is saved on this machine BEFORE it is sent, and only
-// deleted once the sheet confirms it has it. No internet at the venue loses
-// nothing - it goes when the connection comes back. With SCORES_ENDPOINT left
-// empty, submissions simply wait on this machine until one is set.
-const SCORES_ENDPOINT = "";   // the web app URL, ending in /exec
+// Paste in the config Firebase shows for a web app. None of these values are
+// secret: they only say which project to talk to. What protects the scores is
+// the rules - anyone may read the published list, and only the operator
+// account can add to it.
+//
+// Left empty, submitting still works: boards wait on this machine until this
+// is filled in and the operator signs in on the highscores page.
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyD83F6NBFWx7ihs4Q_oRdQLwJSPzZP3YQs",
+  authDomain: "mbohscores.firebaseapp.com",
+  projectId: "mbohscores",
+  storageBucket: "mbohscores.firebasestorage.app",
+  messagingSenderId: "24449322097",
+  appId: "1:24449322097:web:c493c9926c6aa5f0475fd0"
+};
 
-// Must match SECRET in Code.gs. Not real security - anyone who can see this
-// page's source can read it - just enough that stray requests to the URL are
-// turned away. The worst someone holding it can do is add junk rows: the web
-// app has no way to read, change or delete what is already in the sheet.
-const SCORES_SECRET = "";
+const HIGHSCORES_COLLECTION = "highscores";          // one document per result
+const HIGHSCORES_TABLE_DOC = "highscores_meta/table";  // the published list: one read per view
 
-const SCORES_TIMEOUT_SECONDS = 20;   // Apps Script can take a few seconds to wake
+const SCORES_TIMEOUT_SECONDS = 20;   // how long to wait for the database to answer
 const SCORES_RETRY_SECONDS = 60;     // how often to retry while anything is waiting
 
 // How long a melodic note rings when the editor previews it on click - long
@@ -397,9 +403,9 @@ const CUTOFF_HZ = [60, 14000];
 // sound panel has its own switch below, so the two can be turned on
 // independently - tuning the sound on the night should not put a drop target
 // back on the menu.
-let DEBUG = true;
+let DEBUG = false;
 
-let DEBUG_SOUND = true;
+let DEBUG_SOUND = false;
 
 //////////////////////////////////////////////////////////////////////
 // LOOK
@@ -823,3 +829,11 @@ const EMBER_SPEED = [50, 320];      // px/s, outward from the edge it was born o
 const EMBER_RISE = -170;            // px/s^2 - negative, so embers float upward
 const EMBER_DRAG = 1.9;             // per second; higher slows them sooner
 const EMBER_SPREAD = 0.7;           // radians of scatter either side of straight out
+
+// The highscores page keeps a fire going around its list for as long as it is
+// open: a steady trickle off the top and sides instead of one burst. Same
+// embers - same life, rise, drag and colours as above - just gentler.
+// The cost is a few dozen squares on screen at any moment.
+const EMBER_GLOW_RATE = 55;          // embers a second
+const EMBER_GLOW_SPEED = [30, 150];  // px/s - slower than the burst, so they drift
+const EMBER_GLOW_SIZE = [4, 12];     // px

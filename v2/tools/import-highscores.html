@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Import the old highscores</title>
+  <style>
+    :root { color-scheme: dark; }
+    /* Without this, `form { display: flex }` below beats the hidden attribute
+       and the sign-in form stays on screen after signing in. */
+    [hidden] { display: none !important; }
+    body { margin: 0; padding: 32px 20px; background: #0e0e16; color: #e9e9f2;
+           font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    h2 { font-size: 15px; margin: 28px 0 8px; color: #ffb03a; }
+    p { color: #b8b8cc; margin: 6px 0; }
+    input, button { font: inherit; color: inherit; background: #14141c; border: 1px solid #3a3a4d;
+                    border-radius: 4px; padding: 5px 8px; }
+    button { cursor: pointer; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    input[type=url] { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+    form { display: flex; gap: 6px; flex-wrap: wrap; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 13px; }
+    td, th { padding: 2px 8px; border-bottom: 1px solid #22222e; text-align: left; }
+    td.n, th.n { text-align: right; }
+    .bad { color: #ff7a6a; }
+    .good { color: #7ad69a; }
+    .box { background: #14141c; border: 1px solid #2c2c3c; border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
+  </style>
+  <script src="../config.js"></script>
+  <script src="../highscores.js"></script>
+</head>
+<body>
+<main>
+  <h1>Import the old highscores</h1>
+  <p>Copies every row of the old Google Sheet into the highscore database, then publishes the list.
+     Safe to run again: it replaces the rows it imported last time instead of adding a second copy,
+     and never touches scores added by the game.</p>
+  <p id="config-warning" class="bad" hidden>FIREBASE_CONFIG in config.js is empty - set up the database first (README, "The highscore database").</p>
+
+  <h2>1. Sign in as the operator</h2>
+  <form id="signin">
+    <input id="email" type="email" placeholder="operator email" autocomplete="username">
+    <input id="password" type="password" placeholder="password" autocomplete="current-password">
+    <button type="submit">sign in</button>
+  </form>
+  <p id="who">…</p>
+
+  <h2>2. Load the old sheet</h2>
+  <p>The address the old viewer page used (the sheet published as CSV), or a CSV file downloaded from the sheet.</p>
+  <input id="url" type="url"
+         value="https://docs.google.com/spreadsheets/d/e/2PACX-1vQgyGHcvhQW86mwFaWEsZFR-qX5ZhU7mo6WDj3t1_BVRnK4I49DmnpGDmdZochw9YvUwy-T5sU6nYXd/pub?gid=0&single=true&output=csv">
+  <button id="fetch">load from address</button>
+  &nbsp; or &nbsp; <input id="file" type="file" accept=".csv,text/csv">
+  <div id="preview"></div>
+
+  <h2>3. Import</h2>
+  <button id="import" disabled>import</button>
+  <p id="progress"></p>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let rows = [];
+
+  if (!Highscores.configured()) $("config-warning").hidden = false;
+
+  function updateImportButton() {
+    const ready = rows.length > 0 && !!Highscores.user;
+    $("import").disabled = !ready;
+    $("import").textContent = rows.length ? `import ${rows.length} rows` : "import";
+  }
+
+  Highscores.onChange(user => {
+    $("who").textContent = user ? `signed in as ${user.email}` : "not signed in";
+    $("signin").hidden = !!user;
+    updateImportButton();
+  });
+  Highscores.start().then(ok => {
+    if (!ok && Highscores.configured()) $("who").textContent = "could not load Firebase: " + Highscores.error;
+  });
+
+  $("signin").onsubmit = async (event) => {
+    event.preventDefault();
+    $("who").textContent = "signing in…";
+    try { await Highscores.signIn($("email").value, $("password").value); }
+    catch (err) { $("who").textContent = err.message; }
+  };
+
+  function cell(tag, text, cls) {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    if (cls) el.className = cls;
+    return el;
+  }
+
+  function load(text) {
+    const preview = $("preview");
+    preview.replaceChildren();
+    rows = [];
+    let result;
+    try {
+      result = Highscores.legacyEntries(text);
+    } catch (err) {
+      preview.append(cell("p", err.message, "bad"));
+      updateImportButton();
+      return;
+    }
+    rows = result.rows;
+    const box = cell("div", "", "box");
+    const stars = rows.filter(r => r.data.bonus).length;
+    const places = new Set(rows.map(r => r.data.location)).size;
+    box.append(cell("p", `${rows.length} rows · ${stars} with a bonus star · ${places} places`, "good"));
+    result.problems.forEach(p => box.append(cell("p", p, "bad")));
+
+    const table = document.createElement("table");
+    const head = document.createElement("tr");
+    ["#", "name", "from", "score", "bonus"].forEach((h, i) => head.append(cell("th", h, i === 0 || i === 3 ? "n" : "")));
+    table.append(head);
+    const show = rows.length > 10 ? rows.slice(0, 5).concat([null], rows.slice(-4)) : rows;
+    show.forEach(r => {
+      const tr = document.createElement("tr");
+      if (!r) { tr.append(cell("td", "…")); table.append(tr); return; }
+      tr.append(cell("td", r.data.legacyRank, "n"), cell("td", r.data.name), cell("td", r.data.location),
+                cell("td", r.data.score, "n"), cell("td", r.data.bonus ? "★" : ""));
+      table.append(tr);
+    });
+    box.append(table);
+    preview.append(box);
+    updateImportButton();
+  }
+
+  $("fetch").onclick = async () => {
+    $("preview").replaceChildren(cell("p", "loading…"));
+    try {
+      const response = await fetch($("url").value, { cache: "no-store" });
+      if (!response.ok) throw new Error(`the address answered ${response.status}`);
+      load(await response.text());
+    } catch (err) {
+      $("preview").replaceChildren(cell("p", `could not load it: ${err.message}`, "bad"));
+    }
+  };
+
+  $("file").onchange = () => {
+    const file = $("file").files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => load(String(reader.result));
+    reader.readAsText(file, "utf-8");
+  };
+
+  $("import").onclick = async () => {
+    if (!confirm(`Write ${rows.length} old highscores into the database and publish the list?`)) return;
+    $("import").disabled = true;
+    $("progress").className = "";
+    $("progress").textContent = "importing…";
+    try {
+      const result = await Highscores.importLegacy(rows, (done, total) => {
+        $("progress").textContent = `written ${done} of ${total}…`;
+      });
+      $("progress").className = "good";
+      $("progress").textContent = `done - ${rows.length} imported, and the published list now has ${result.published} scores.`;
+    } catch (err) {
+      $("progress").className = "bad";
+      $("progress").textContent = `stopped: ${err.message}. Nothing is lost by running it again.`;
+      updateImportButton();
+    }
+  };
+</script>
+</body>
+</html>

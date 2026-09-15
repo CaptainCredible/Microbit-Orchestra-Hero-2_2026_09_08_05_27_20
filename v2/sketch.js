@@ -90,6 +90,7 @@ function setup() {
   Scoreboard.build();
   // Anything submitted while the sheet was out of reach last time goes now.
   Scoreboard.startOutbox();
+  Leaderboard.build();
 }
 
 function buildUI() {
@@ -107,6 +108,7 @@ function buildUI() {
   ui.calibrate = createButton("calibrate timing").mousePressed(startCalibration);
   ui.resetScores = createButton("reset player scores").mousePressed(resetPlayerScores);
   ui.editor = createButton("open MIDI editor").mousePressed(() => setPage("EDITOR"));
+  ui.highscores = createButton("highscores").mousePressed(() => setPage("HIGHSCORES"));
   ui.hex = createA("https://makecode.microbit.org/_5F62ug11KMCc",
     "get the hex file for your micro:bit", "_blank");
 
@@ -149,6 +151,7 @@ function layoutUI() {
   const pad = 22;
 
   ui.editor.position(width - 190, pad);
+  ui.highscores.position(pad, pad);
 
   ui.back.position(pad, pad);
   ui.restart.position(pad + 130, pad);
@@ -196,13 +199,15 @@ const BAND = {
 
 // One place that decides which controls exist on which page.
 const PAGE_UI = {
-  STAGE_SELECT: ["connect", "disconnect", "calibrate", "resetScores", "editor", "hex"],
+  STAGE_SELECT: ["connect", "disconnect", "calibrate", "resetScores", "editor", "hex", "highscores"],
   GAME:         [],
   PAUSE:        ["back", "restart", "resume"],
   // Nothing: at the end of a song "back to songs" and "restart" are in the
   // scoreboard's own footer instead. The board owns the middle of the screen,
   // so the way out belongs on it rather than tucked in a corner behind it.
   END:          [],
+  // The list is a DOM panel with its own "back to songs", like the scoreboard.
+  HIGHSCORES:   [],
   EDITOR:       ["edPrev", "edNext", "edAddPage", "edRemovePage", "edCopyPage",
                  "edPastePage", "edBarsDown", "edBarsUp",
                  "edBpmDown", "edBpmUp", "edClear", "edPlayPause", "edLoopMode",
@@ -264,6 +269,14 @@ function setPage(next) {
   } else {
     Scoreboard.hide();
     Embers.clear();
+  }
+
+  if (next === "HIGHSCORES") {
+    Leaderboard.show();
+    // Measured after show(), for the same reason as the scoreboard's burst.
+    Embers.burst(Leaderboard.rect(), millis() / 1000);
+  } else {
+    Leaderboard.hide();
   }
 }
 
@@ -987,7 +1000,15 @@ function draw() {
     case "GAME":
     case "PAUSE":
     case "END":          drawPerformance(); break;
+    case "HIGHSCORES":   drawHighscores(); break;
   }
+}
+
+// The list itself is a DOM panel. All the canvas adds on this page is the fire
+// around it, drawn behind the panel so it licks out from under the edges.
+function drawHighscores() {
+  Embers.glow(Leaderboard.rect(), EMBER_GLOW_RATE);
+  Embers.draw(millis() / 1000);
 }
 
 function drawPerformance() {
@@ -1772,7 +1793,7 @@ function mousePressed(event) {
   // p5 binds mouse events to the window, so a click on the panel would also
   // land here and could start a song behind it.
   if (SoundPanel.ownsEvent(event) || TimingDrawer.ownsEvent(event) ||
-      Scoreboard.ownsEvent(event)) return;
+      Scoreboard.ownsEvent(event) || Leaderboard.ownsEvent(event)) return;
 
   if (page === "STAGE_SELECT") {
     // The icon sits inside the card it belongs to, so without this a click
@@ -1851,6 +1872,7 @@ function keyPressed() {
   }
   if (keyCode === ESCAPE) {
     if (page === "EDITOR") { stopEditorPlayback(); setPage("STAGE_SELECT"); }
+    else if (page === "HIGHSCORES") setPage("STAGE_SELECT");
     else if (page !== "STAGE_SELECT") stopAndExit();
   }
 }

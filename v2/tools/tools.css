@@ -1,0 +1,100 @@
+/* Shared look for the pages in tools/: the management tool and the operator
+   request form. Plain and dark, in the game's colours. */
+
+:root { color-scheme: dark; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  padding: 28px 20px 60px;
+  background: #0e0e16;
+  color: #e9e9f2;
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 820px; margin: 0 auto; }
+main.wide { max-width: 1240px; }
+
+h1 { font-size: 24px; margin: 0 0 6px; color: #ffb03a; }
+h2 { font-size: 15px; margin: 26px 0 8px; color: #ffb03a; }
+p { margin: 6px 0; color: #b8b8cc; }
+a { color: #ffb03a; }
+
+input, textarea, select, button {
+  font: inherit;
+  color: inherit;
+  background: #14141c;
+  border: 1px solid #3a3a4d;
+  border-radius: 5px;
+  padding: 5px 9px;
+}
+textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: #ff8c1a; }
+button { cursor: pointer; }
+button:hover { border-color: #6b6b8a; background: #1b1b26; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { border-color: #b5561a; background: #3a1d0c; }
+button.primary:hover { background: #4a250f; border-color: #ff8c1a; }
+button.danger { border-color: #7a3030; }
+button.danger:hover { background: #3a1414; border-color: #c04040; }
+
+form.row, .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+form.stack { display: grid; gap: 10px; }
+form.stack label { display: grid; gap: 4px; color: #b8b8cc; font-size: 13px; }
+
+.box {
+  background: #14141c;
+  border: 1px solid #2c2c3c;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+.note { font-size: 13px; color: #9a9ab5; }
+.good { color: #7ad69a; }
+.bad { color: #ff7a6a; }
+.warn { color: #ffc86a; }
+.dim { color: #6f6f88; }
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid currentColor;
+  vertical-align: 1px;
+}
+
+.tabs { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid #2c2c3c; }
+.tabs button {
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  color: #9a9ab5;
+}
+.tabs button.on { border-color: #2c2c3c; background: #14141c; color: #ffb03a; }
+.panel { padding: 14px 0; }
+
+.table-wrap { overflow-x: auto; margin-top: 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6f6f88;
+  padding: 4px 8px;
+  border-bottom: 1px solid #2c2c3c;
+}
+td { padding: 4px 8px; border-bottom: 1px solid #1d1d28; vertical-align: middle; }
+tr:hover td { background: rgba(255, 255, 255, 0.02); }
+tr.editing td { background: rgba(255, 140, 26, 0.07); }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+td.star { color: #ffd23c; text-align: center; }
+td.actions { white-space: nowrap; text-align: right; }
+td.actions button { padding: 2px 8px; font-size: 12px; }
+td input { width: 100%; box-sizing: border-box; padding: 2px 6px; }
+td input[type=checkbox] { width: auto; }
+td.message { white-space: pre-wrap; max-width: 380px; color: #c8c8da; }
+
+.status { min-height: 1.5em; }

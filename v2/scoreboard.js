@@ -8,7 +8,7 @@
 // really for are not typing:
 //
 //   in  - scores arriving over serial from the micro:bit
-//   out - submitting the finished board to a Google Sheet
+//   out - submitting the finished board to the highscore database
 //
 //   Scoreboard.setScore(player, score)  <- the serial reader calls this
 //   Scoreboard.setName(player, name)
@@ -17,7 +17,7 @@
 // setScore/setName write the data *and* update the boxes on screen, so a
 // score arriving while the board is open appears in it. submit() goes through
 // ScoreOutbox, at the bottom of this file, which keeps a copy on this machine
-// until the sheet confirms it.
+// until the database confirms it - see highscores.js.
 //
 // The board is also the END page's only controls: "back to songs" and
 // "restart" live in its footer rather than up in the corner, because the
@@ -27,11 +27,13 @@
 const Scoreboard = {
   root: null,
   grid: null,
-  players: [],     // the data: one { name, score } per player, score may be null
-  rows: [],        // the DOM for each player: { el, name, score, rank }
+  players: [],     // the data: one { name, score, bonus } per player, score may be null
+  rows: [],        // the DOM for each player: { el, name, score, star, rank }
   statusEl: null,
   sortEl: null,
   submitted: false,
+  location: "",    // where the board was played - one for the whole board
+  locationEl: null,
 
   // Display order only. false is 0,1,2..15 down the board; true is 1st place
   // first. Either way each row keeps its own number and robot name - sorting
@@ -43,7 +45,7 @@ const Scoreboard = {
   // scores alone, and `clear` is the only thing that empties it.
   init() {
     this.players = [];
-    for (let i = 0; i < SCOREBOARD_PLAYERS; i++) this.players.push({ name: "", score: null });
+    for (let i = 0; i < SCOREBOARD_PLAYERS; i++) this.players.push({ name: "", score: null, bonus: false });
   },
 
   build() {
@@ -72,7 +74,23 @@ const Scoreboard = {
     const clear = document.createElement("button");
     clear.textContent = "clear";
     clear.onclick = () => this.clear();
-    head.append(title, this.serialEl, this.sortEl, clear);
+    // Where this board was played. One box for the whole board, since it is
+    // the same for everyone at the venue, and remembered between boards and
+    // between visits - typed once a day, not once a game.
+    this.locationEl = document.createElement("input");
+    this.locationEl.id = "sb-location";
+    this.locationEl.type = "text";
+    this.locationEl.maxLength = 80;
+    this.locationEl.placeholder = "location";
+    this.location = loadLocation();
+    this.locationEl.value = this.location;
+    this.locationEl.oninput = () => {
+      this.location = this.locationEl.value;
+      saveLocation(this.location);
+      this.touched();
+    };
+
+    head.append(title, this.serialEl, this.locationEl, this.sortEl, clear);
 
     const grid = document.createElement("div");
     grid.className = "sb-grid";
@@ -113,9 +131,16 @@ const Scoreboard = {
       const rank = document.createElement("div");
       rank.className = "sb-rank";
 
-      row.append(id, robot, name, score, rank);
+      // The bonus star, handed out by hand.
+      const star = document.createElement("button");
+      star.type = "button";
+      star.className = "sb-star";
+      star.title = "bonus star";
+      star.onclick = () => this.setBonus(i, !this.players[i].bonus);
+
+      row.append(id, robot, name, score, star, rank);
       grid.appendChild(row);
-      this.rows.push({ el: row, name, score, rank });
+      this.rows.push({ el: row, name, score, star, rank });
     }
 
     const foot = document.createElement("footer");
@@ -201,6 +226,13 @@ const Scoreboard = {
     return true;
   },
 
+  setBonus(player, on) {
+    if (!this.valid(player)) return false;
+    this.players[player].bonus = !!on;
+    this.touched();
+    return true;
+  },
+
   valid(player) {
     return Number.isInteger(player) && player >= 0 && player < SCOREBOARD_PLAYERS;
   },
@@ -272,41 +304,58 @@ const Scoreboard = {
   // not part of it. The receiving end can sort by score itself.
   entries() {
     return this.players
-      .map((p, i) => ({ player: i, robot: ROBOT_NAMES[i] || "", name: p.name.trim(), score: p.score }))
+      .map((p, i) => ({ player: i, robot: ROBOT_NAMES[i] || "", name: p.name.trim(), score: p.score, bonus: !!p.bonus }))
       .filter(e => e.score !== null || e.name !== "");
   },
 
-  // `id` is one per press of submit. The sheet uses it to recognise a retry
-  // of a board it already has, so a reply lost on the way back cannot turn
-  // into the same scores twice.
+  // `id` is one per press of submit. The database uses it to recognise a
+  // retry of a board it already has, so an answer lost on the way back cannot
+  // turn into the same scores twice.
   payload() {
     return {
       id: newSubmissionId(),
       song: currentSong ? currentSong.name : null,
+      location: (this.location || "").trim(),
       at: new Date().toISOString(),
       scores: this.entries()
     };
   },
 
-  // Saved on this machine first, then sent. The status line only ever says
-  // "sent" once the sheet has answered that it has them - nobody should walk
-  // away thinking scores are off the machine when they are not.
+  // Saved on this machine first, then sent. The status line only says a score
+  // is on the list once the database has answered that it is - nobody should
+  // walk away thinking scores are off the machine when they are not.
   submit() {
     const payload = this.payload();
     if (!payload.scores.length) {
       this.say("nothing to submit - no names or scores entered yet");
       return null;
     }
-    // Pressing it twice is the easiest way to get a board into the sheet
-    // twice, and the second press has a new id so the sheet cannot tell.
+    // Pressing it twice is the easiest way to get a board on the list twice,
+    // and the second press has a new id so the database cannot tell.
     // Changing anything on the board clears this, via touched().
     if (this.submitted) {
       this.say("already submitted - change something to submit again");
       return null;
     }
+    if (!payload.location) {
+      this.say("fill in the location at the top first");
+      if (this.locationEl) this.locationEl.focus();
+      return null;
+    }
+    // The highscore list is names against scores, so a robot that reported a
+    // score nobody put a name to - or a name with no score - stays off it.
+    const complete = payload.scores.filter(s => s.name !== "" && s.score !== null);
+    const left = payload.scores.length - complete.length;
+    if (!complete.length) {
+      this.say("nothing to submit - a score needs a name to go on the list");
+      return null;
+    }
+    payload.scores = complete;
+
     this.submitted = true;
     ScoreOutbox.add(payload);
-    this.say(`${payload.scores.length} saved on this machine - sending...`);
+    this.say(`${complete.length} saved on this machine - sending...` +
+             (left ? ` (${left} without both a name and a score left out)` : ""));
     this.flush();
     return payload;
   },
@@ -321,12 +370,14 @@ const Scoreboard = {
     return result;
   },
 
-  // Called once at startup: sends whatever was left waiting last time, and
-  // again whenever the browser says the connection is back.
+  // Called once at startup: sends whatever was left waiting last time, again
+  // whenever the browser says the connection is back, and the moment the
+  // operator signs in - including a saved sign-in picked up on startup.
   startOutbox() {
     if (typeof window !== "undefined" && window.addEventListener) {
       window.addEventListener("online", () => this.flush());
     }
+    Highscores.onChange(user => { if (user && ScoreOutbox.pending()) this.flush(); });
     if (ScoreOutbox.pending()) this.flush();
   },
 
@@ -425,6 +476,10 @@ const Scoreboard = {
       if (!row) return;
       if (document.activeElement !== row.name) row.name.value = p.name;
       if (document.activeElement !== row.score) row.score.value = p.score === null ? "" : p.score;
+      if (row.star) {
+        row.star.textContent = p.bonus ? "★" : "☆";
+        row.star.classList.toggle("sb-star-on", !!p.bonus);
+      }
 
       const place = ranks[i];
       row.rank.textContent = place ? ordinal(place) : "";
@@ -460,25 +515,37 @@ function ordinal(n) {
 // What to tell the room about a send. Empty when there is nothing worth
 // saying, so a quiet background retry does not overwrite other messages.
 function describeSend(r) {
-  const waiting = r.left === 1 ? "1 submission" : `${r.left} submissions`;
+  const waiting = r.left === 1 ? "1 board" : `${r.left} boards`;
   if (r.unconfigured) {
-    return r.left ? `${waiting} saved on this machine - no score sheet set up yet` : "";
+    return r.left ? `${waiting} saved on this machine - no highscore database set up yet` : "";
+  }
+  if (r.signedout) {
+    return `${waiting} saved on this machine - sign in on the highscores page to send`;
   }
   if (r.unreachable) {
-    return `can't reach the score sheet - ${waiting} saved on this machine, will retry`;
+    return `can't reach the highscore database - ${waiting} saved on this machine, will retry`;
   }
   if (r.error) {
-    return `the score sheet refused it (${r.error}) - ${waiting} kept on this machine`;
+    return `the database refused it (${r.error}) - ${waiting} kept on this machine`;
   }
   if (r.sent) {
-    // Nothing added means every one was a retry the sheet already had - its
-    // earlier reply was lost on the way back.
-    const done = r.rows === 0 ? "already in the score sheet"
-      : r.rows === 1 ? "1 score sent to the score sheet"
-      : `${r.rows} scores sent to the score sheet`;
+    // Nothing added means every one was a retry the database already had -
+    // its earlier answer was lost on the way back.
+    const done = r.rows === 0 ? "already on the highscore list"
+      : r.rows === 1 ? "1 score added to the highscore list"
+      : `${r.rows} scores added to the highscore list`;
     return r.left ? `${done} - ${waiting} still waiting` : done;
   }
   return "";
+}
+
+// The venue, kept between visits. Wrapped because localStorage can be blocked,
+// and a board that will not open is worse than a location box that forgets.
+function loadLocation() {
+  try { return localStorage.getItem("mboh.location") || ""; } catch (err) { return ""; }
+}
+function saveLocation(value) {
+  try { localStorage.setItem("mboh.location", value); } catch (err) { /* forgotten on reload */ }
 }
 
 function newSubmissionId() {
@@ -488,15 +555,16 @@ function newSubmissionId() {
   return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
 }
 
-// Submissions that have not yet reached the score sheet.
+// Boards that have not yet reached the highscore database.
 //
 // Kept in localStorage, so closing the browser, a crash or a venue with no
-// internet does not lose a board: each one stays here until the sheet answers
-// that it has it, and is retried on startup, when the connection comes back,
-// and every SCORES_RETRY_SECONDS while anything is waiting.
+// internet does not lose a board: each one stays here until the database
+// answers that it has it, and is retried on startup, when the connection comes
+// back, when the operator signs in, and every SCORES_RETRY_SECONDS while
+// anything is waiting.
 //
-// Sent oldest first. A network failure stops the round - the rest would only
-// fail the same way - but a submission the sheet *refuses* is kept and the
+// Sent oldest first. Losing the connection stops the round - the rest would
+// only fail the same way - but a board the database *refuses* is kept and the
 // rest still go, so one bad board cannot hold up an evening's worth behind it.
 const ScoreOutbox = {
   KEY: "mboh.scores.outbox",
@@ -536,62 +604,43 @@ const ScoreOutbox = {
 
   async flush() {
     if (this.sending) return { busy: true };
-    if (!SCORES_ENDPOINT) return { unconfigured: true, sent: 0, rows: 0, left: this.pending() };
+    const result = { sent: 0, rows: 0, left: 0, error: "",
+                     unreachable: false, signedout: false, unconfigured: false };
+    if (!this.pending()) return result;
+    if (!Highscores.configured()) {
+      result.unconfigured = true;
+      result.left = this.pending();
+      return result;
+    }
 
     this.sending = true;
-    const result = { sent: 0, rows: 0, left: 0, error: "", unreachable: false };
     try {
       for (const payload of this.load()) {
         let answer;
         try {
-          answer = await this.post(payload);
+          answer = await Highscores.saveBoard(payload);
         } catch (err) {
+          const kind = err && err.kind;
+          if (kind === "refused") { result.error = err.message; continue; }
+          if (kind === "signedout") { result.signedout = true; break; }
+          if (kind === "unconfigured") { result.unconfigured = true; break; }
           result.unreachable = true;
           result.error = err && err.message ? err.message : String(err);
           break;
         }
-        if (answer && answer.ok) {
-          this.remove(payload.id);
-          result.sent++;
-          result.rows += answer.added || 0;
-        } else {
-          result.error = (answer && answer.error) || "no reason given";
-        }
+        this.remove(payload.id);
+        result.sent++;
+        result.rows += answer.added || 0;
       }
     } finally {
       this.sending = false;
     }
 
     result.left = this.pending();
-    this.retryLater(result.left);
+    // Not on a timer while signed out: nothing changes until somebody signs
+    // in, and signing in sends them straight away.
+    if (!result.signedout) this.retryLater(result.left);
     return result;
-  },
-
-  async post(payload) {
-    const abort = typeof AbortController === "function" ? new AbortController() : null;
-    const timer = setTimeout(() => { if (abort) abort.abort(); }, SCORES_TIMEOUT_SECONDS * 1000);
-    try {
-      const response = await fetch(SCORES_ENDPOINT, {
-        method: "POST",
-        // text/plain, not application/json. That keeps it a "simple" request
-        // with no CORS preflight - which Apps Script cannot answer, so a JSON
-        // content type fails before the request is even sent. The script
-        // parses the body as JSON whatever it is labelled.
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(Object.assign({ secret: SCORES_SECRET }, payload)),
-        redirect: "follow",
-        signal: abort ? abort.signal : undefined
-      });
-      const text = await response.text();
-      try {
-        return JSON.parse(text);
-      } catch (err) {
-        // A Google error or sign-in page rather than the script's answer.
-        throw new Error(`unexpected reply from the sheet (HTTP ${response.status})`);
-      }
-    } finally {
-      clearTimeout(timer);
-    }
   },
 
   retryLater(left) {

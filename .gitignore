@@ -1,0 +1,9 @@
+# macOS folder metadata
+.DS_Store
+
+# The old highscore list: players' names, schools and classes. It lives in the
+# database now, and a public repo's history is forever.
+OldHighscores
+
+# Firebase CLI logs, if the emulators are ever run from here
+*-debug.log

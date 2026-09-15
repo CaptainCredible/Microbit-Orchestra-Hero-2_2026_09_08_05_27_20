@@ -1243,7 +1243,7 @@ are not typing:
 | Direction | Seam | What calls it |
 |---|---|---|
 | in | `Scoreboard.setScore(player, score)` / `setName(player, name)` | the serial reader — see below |
-| out | `Scoreboard.submit()`, sending `Scoreboard.payload()` | **submit scores** — to a Google Sheet, see "Saving scores to a Google Sheet" |
+| out | `Scoreboard.submit()`, sending `Scoreboard.payload()` | **submit scores** — to the global highscore list, see "The highscore database" |
 
 ### Scores arriving over serial
 
@@ -1297,109 +1297,234 @@ second. Players with no score are not in the running at all.
 point of it, so finishing a song, going back to the menu and playing another
 leaves the scores alone; `clear` is the only thing that empties it.
 
-### Saving scores to a Google Sheet
+### The highscore database
 
-**submit scores** adds the board to a Google Sheet, one row per player:
+**submit scores** adds the board to the global highscore list. **highscores**,
+top left of the menu, shows the whole list. The list lives in **Cloud
+Firestore**, on Firebase's free **Spark** plan: it never asks for a card and
+cannot be billed. If one of its daily limits (50,000 reads, 20,000 writes) is
+ever reached, requests are turned down until the next day. Nothing is charged.
 
-| received | played | song | player | robot | name | score | submission |
-|---|---|---|---|---|---|---|---|
+Every score on the list has a **position** (worked out from the scores, never
+stored), **name**, **location**, **date**, **score** and **bonus star**. Scores
+from the game also record the song, the robot and the player number.
 
-Only players with a name or a score are sent. It goes through a small Google
-Apps Script attached to the sheet — `scores-backend/Code.gs` — so there is no
-server to run. **It costs nothing and cannot start to:** Apps Script on an
-ordinary Google account has no billing to switch on and never asks for a card,
-and its free limits are far beyond a few boards an evening.
+On the end-of-game board:
 
-#### Setting it up (about ten minutes, once)
+- **location**, in the board's header, is typed once per venue and remembered.
+  A board cannot be submitted without it.
+- **☆** on each row hands out a bonus star. Click again to take it back.
+- Only players with **both a name and a score** go on the list. A robot that
+  reported a score nobody put a name to stays off, and the status line says
+  how many were left out.
 
-1. Signed in to the Google account that should own the scores, make a new
-   spreadsheet (`sheets.new`) and give it a name.
-2. **Extensions → Apps Script.** Delete what is in `Code.gs` and paste in the
-   whole of `v2/scores-backend/Code.gs`.
-3. Change `const SECRET = "change-me";` to a made-up phrase of your own, and
-   save.
-4. Pick **setup** in the function dropdown at the top and press **Run**. Google
-   asks for permission. Because this is your own script and not a published
-   app, it warns that the app is unverified: **Advanced → Go to (project name)
-   → Allow**. What it asks for is access to *this spreadsheet only* — that is
-   what the `@OnlyCurrentDoc` line at the top of the script does. A **Scores**
-   tab appears with the header row.
-5. **Deploy → New deployment**, click the gear, choose **Web app**:
-   - Execute as: **Me**
-   - Who has access: **Anyone**
+The highscores page keeps a fire going around its list while it is open — a
+steady trickle of embers off the top and sides, the same embers as the end of a
+song (`EMBER_GLOW_RATE`, `EMBER_GLOW_SPEED` and `EMBER_GLOW_SIZE` in
+`config.js`) — and bonus stars shimmer and twinkle, each at its own moment. The
+twinkle holds still for anyone whose system asks for reduced motion.
 
-   Deploy, and copy the **Web app URL** — it ends in `/exec`.
-6. Open that URL in a browser. You should see
-   `{"ok":true,"service":"mboh-scores","rows":0}`.
-7. In `config.js`, set `SCORES_ENDPOINT` to that URL and `SCORES_SECRET` to the
-   same phrase as in step 3.
+Positions go highest score first. Equal scores share a place — two 2nds are
+followed by a 4th — and between equal scores, older entries come first: the
+old sheet's own order for imported rows, then earliest date for the game's.
 
-Then finish a song, put a score on the board and press **submit scores**. The
-status line should say *"1 score sent to the score sheet"*, and the row is in
-the sheet.
+#### Setting it up (once, about fifteen minutes)
 
-**Changing the script later:** saving it is not enough, the live web app keeps
-running the old version. Use **Deploy → Manage deployments**, the pencil,
-**Version: New version**, Deploy. That keeps the same URL; *New deployment*
-would give you a different one, and `config.js` would need updating.
+1. Go to [console.firebase.google.com](https://console.firebase.google.com),
+   **Create a project**, and give it a name. Google Analytics is not needed.
+   New projects start on Spark, the free plan. Leave it there.
+2. **Build → Firestore Database → Create database.** Pick a location near you
+   (a European one for Norway), since it cannot be changed later. Start in
+   **production mode**.
+3. **Build → Authentication → Get started → Email/Password**, and enable it.
+   Only the first switch, not "email link".
+4. **Authentication → Users → Add user**: an email and password for **you,
+   the admin**. Copy that user's **User UID**.
+5. **Firestore Database → Rules**: paste in all of `firebase/firestore.rules`,
+   put your UID in the `isAdmin()` list near the top — keep the quotes:
+   `['your-uid']` — and **Publish**.
+6. **Project settings** (the gear) **→ General → Your apps → Web** (`</>`).
+   Register an app (no Hosting needed) and copy the values from the
+   `firebaseConfig` it shows into `FIREBASE_CONFIG` in `config.js`.
+   
+7. Open the game, press **highscores**, and sign in as the admin. Each machine
+   does this once and then stays signed in. Anyone else who will run the game
+   asks to become an operator — see "Becoming an operator".
+8. Move the old list across: open `tools/import-highscores.html` from the same
+   server as the game (for example `http://localhost:8777/tools/import-highscores.html`).
+   Sign in, press **load from address** (the old viewer's published CSV is
+   already filled in), check the preview, then **import**.
 
-#### What "Anyone" means, and what the risk is
+The import brings over all 1,313 rows of the old sheet — `NAME` → name,
+`FROM` → location, `SCORE` → score, a `*` in `BONUS` → bonus star — in the
+sheet's own order. The old sheet has no dates, so imported rows have none. It
+is safe to run again: it replaces what it imported last time rather than
+adding a second copy, and never touches scores that came from the game.
 
-"Anyone" lets the app call the script without being signed in to Google. It
-does not give anyone access to the spreadsheet. The script can do exactly two
-things: add rows (only if the request carries the secret) and, on a plain
-visit, report how many rows there are. It has no code to read scores back
-out, change a row or delete one, and it can only touch this one spreadsheet.
+#### Who can do what
 
-The secret is not strong protection. It sits in `config.js`, so anyone who
-can read the page's source can find it. The worst they could do with it is add
-junk rows, which you can delete by hand. Real names typed into the board are
-the only personal data involved, and only first names or nicknames are
-expected. Beyond that:
+| | anyone | operator | admin |
+|---|---|---|---|
+| read the published list | yes | yes | yes |
+| ask to become an operator | yes | – | – |
+| add scores from the game | no | yes, signed with their account | yes |
+| read single scores | no | only their own | all, with who sent them |
+| edit or delete scores | no | no | yes |
+| approve, turn down and ban operators | no | no | yes |
 
-- Names starting with `=`, `+`, `-` or `@` are stored as plain text. Without
-  this, a "name" like `=IMPORTXML(...)` would run as a formula in your sheet.
-- A board with an out-of-range player, a non-numeric or absurd score, or more
-  than 32 entries is refused as a whole, so nothing is half-written.
+All of that is enforced by `firebase/firestore.rules`, not by the pages. A
+page only shows what the rules already allow. The admin is named in exactly
+one place, the `isAdmin()` list in the rules. Operators are the `operators`
+collection, each `active` or `banned`, and the rules check that on every write,
+so a ban takes effect on the very next board.
+
+**Every score records who sent it**: `submittedBy` (the account's UID) and
+`submittedEmail`. The rules check both against the sender's sign-in, so they
+cannot be forged, and they are never published — the public list has names,
+places, dates, scores and stars. The one account detail in the public document
+is `updatedBy`, the anonymous account ID of whoever last added to it: no name,
+no email, and only the admin can see which account an ID belongs to. Scores
+sent before this was added show no sender.
+
+The rules also check the shape of every write — types, lengths, no extra
+fields. The values in `FIREBASE_CONFIG` are **not secret**. They only say
+which project to talk to, and the rules are what protect it.
+
+#### Becoming an operator
+
+Send people to **`tools/request-operator.html`**. The game's highscores page
+links to it for anyone signed out or without access. There they make an
+account and fill in their name, their school or organisation, and where they
+will run the game. A verification email goes out when the account is made,
+and the management tool shows you whether they clicked it.
+
+Nothing notifies you when a request arrives. Sending an email needs a server,
+or Cloud Functions, which are not on the free plan. The management tool's
+**requests** tab shows how many are waiting.
+
+Once approved, they sign in on the game's highscores page with the same email
+and password. The footer there says where an account stands: *admin*,
+*operator*, *waiting for approval*, *request turned down*, *not an operator*
+or *banned*.
+
+The request page can live on the website instead. Copy
+`tools/request-operator.html`, `tools/tools.css`, `config.js` and
+`highscores.js` across, keeping the same folders.
+
+#### Managing highscores
+
+**`tools/manage-highscores.html`**, signed in as the admin. The game's
+highscores page links to it when you are signed in as the admin.
+
+- **scores** — loads every score (one read each, so it waits until you press
+  load). Filter by name, place or email, or pick who sent them. Edit a name,
+  place, score or star, delete one, or tick several and delete them together.
+  Every change updates the published list straight away.
+- **operators** — everyone approved, with their status and how many scores
+  each has sent. **ban** stops them sending anything from their next board on;
+  their existing scores stay until you **delete their scores**, which does it
+  in one go. **unban** puts them back.
+- **requests** — **approve** makes them an active operator. **turn down**
+  means they cannot ask again unless you **delete** the request.
+- **rebuild published list** regenerates the public list from every score.
+  Use it after editing in the Firebase console, or if the list is ever damaged.
+
+A ban works through the database, not by switching the account off. To stop
+someone signing in at all: Firebase console → Authentication → Users → disable
+account.
+
+**What an operator could still do.** Operators have to add to the published
+list, which is one document the rules cannot parse, so the rules check an
+operator's write as text: everything already on the list must stay exactly as
+it was, and the only change allowed is adding to the end, a board at a time
+(at most 32 entries and 20,000 characters). Every write records who made it.
+So nothing already published can be changed, reordered or removed by an
+operator. What a determined vandal could still do is add made-up entries, or
+add something that stops the list loading. If that ever happens, ban them,
+delete their scores, and **rebuild published list** — it is rebuilt from the
+individual scores.
+
+#### Moving an existing setup across
+
+If the database is already running with the single operator account, publish
+the new `firebase/firestore.rules` with your UID in `isAdmin()`. Then open the
+management tool once, signed in as the admin. Everything already there keeps
+working; those scores just have no sender recorded.
+
+#### Why the list is published as one document
+
+The free plan counts every document a query returns as a read. Listing 1,300
+entries on every page view would use up the 50,000 a day after about forty
+views, which a busy exhibition could easily do. So the database holds every
+score as its own document in `highscores` (the record), plus a copy of the
+whole list in **one** document, `highscores_meta/table` (the list everybody
+reads). One read per view, however long the list gets.
+
+The copy is updated as each board is added, so it never needs thinking about
+unless entries are edited by hand, and **rebuild list** regenerates it from
+the record at any time. It stores the list as one JSON string. That keeps it
+clear of Firestore's per-document index limit, which an array of entries
+would hit at around 2,800 scores. The document's 1 MiB size limit allows
+roughly 10,000 scores.
+
+#### Reading the list on the viewer site
+
+No Firebase SDK and no sign-in needed. It is one request:
+
+```js
+const url = "https://firestore.googleapis.com/v1/projects/YOUR-PROJECT-ID" +
+            "/databases/(default)/documents/highscores_meta/table?key=YOUR-API-KEY";
+const doc = await (await fetch(url)).json();
+const entries = JSON.parse(doc.fields.json.stringValue);
+// [{ id, name, location, score, bonus, date, order }, ...] - not yet sorted
+```
+
+Sort by `score` (high first), then `order` (low first), and let equal scores
+share a position. Or load this project's `highscores.js` on the page and let it
+do that: `Highscores.rank(entries)` returns them sorted with a `position` on
+each. If `FIREBASE_CONFIG` is defined on the page, `Highscores.fetchTable()`
+does the request too. In p5 the request is just
+`loadJSON(url, doc => { ... })`.
 
 #### No internet? Nothing is lost
 
-Every submission is **saved on this machine before it is sent**, and removed
-only after the sheet confirms it has it. If the venue's connection is down,
-the status line says *"can't reach the score sheet — 1 submission saved on this
-machine, will retry"*. Waiting boards go:
+Every board is **saved on this machine before it is sent**, and removed only
+once the database confirms it. Waiting boards go:
 
-- every `SCORES_RETRY_SECONDS` (60) while any are waiting,
+- the moment the operator signs in on this machine,
+- every `SCORES_RETRY_SECONDS` (60) while online and signed in,
 - as soon as the browser reports it is back online,
 - and at startup, so closing the browser or a crash loses nothing either.
 
-With `SCORES_ENDPOINT` left empty, boards just wait on the machine until one is
-set.
+The Firebase SDK is only fetched when something needs to write. A machine that
+starts with no internet still starts, and viewing the list needs no SDK at all.
 
 **A board cannot land twice.** Each press of submit gets a submission id, and
-the script skips an id it already has. That matters for the case where the
-sheet saved the board but its reply was lost: the app has to retry, and the
-retry is recognised (*"already in the score sheet"*). Pressing submit twice on
-an unchanged board is refused outright. Changing anything on the board,
-including a score arriving over serial, makes it submittable again.
+each score's document id is that id plus the player number. A retry after a
+lost answer is recognised and reported as *"already on the highscore list"*.
+Pressing submit twice on an unchanged board is refused outright. Changing
+anything on the board — a name, a star, a score arriving over serial — makes
+it submittable again.
 
-A board the sheet *refuses* (say, a wrong secret) stays on the machine too,
-and does not hold up the ones behind it.
+A board the database *refuses* stays on the machine too, and does not hold up
+the ones behind it.
 
-The waiting boards live in the browser's localStorage for this page's address,
-under `mboh.scores.outbox` (DevTools → Application → Local Storage). Two
-consequences: open the app at the same address every time
-(`http://localhost:8777`), and **don't clear browsing data** for it while
-anything is waiting.
+Waiting boards live in the browser's localStorage for the address the game is
+opened at, under `mboh.scores.outbox`, and the location box is remembered the
+same way. Open the game at the same address every time, and don't clear
+browsing data while anything is waiting.
 
 #### When it goes wrong
 
 | The status line says | Usually |
 |---|---|
-| can't reach the score sheet | no internet; or the deployment is not set to **Anyone** (Google sends the request to a sign-in page); or the URL is not the one ending `/exec` |
-| refused it (wrong secret) | `SCORES_SECRET` and `SECRET` differ |
-| refused it (SECRET is not set in the script) | the secret was changed but not redeployed as a new version |
-| no score sheet set up yet | `SCORES_ENDPOINT` is empty |
+| no highscore database set up yet | `FIREBASE_CONFIG` is empty |
+| sign in on the highscores page to send | nobody is signed in on this machine yet |
+| refused it (permission denied - is this account an active operator?) | the account has not been approved, has been banned, or the new rules were never published |
+| can't reach the highscore database | no internet — boards wait and retry |
+| wrong email or password | as it says |
+| email/password sign-in is not switched on in Firebase | step 3 |
+| could not load Firebase | no internet when the SDK was first needed — it tries again next time |
 
 ### Typing and the keyboard shortcuts
 
@@ -1427,8 +1552,14 @@ gets through — getting out is worth having from anywhere.
 | `scene3d.js` | the WEBGL layer behind: swelling pad and bass/keys shapes |
 | `soundpanel.js` | the DEBUG_SOUND tuning panel and settings export |
 | `timing.js` | the bottom drawer holding radio delay and visual offset |
-| `scoreboard.js` | the end-of-game board, serial in, and the outbox that sends boards to the score sheet |
-| `scores-backend/Code.gs` | the Google Apps Script that writes boards into the sheet — pasted into the sheet, not loaded by the page |
+| `scoreboard.js` | the end-of-game board, serial in, and the outbox that keeps boards until the database has them |
+| `highscores.js` | the highscore database: reading the published list, the operator's sign-in, adding boards, importing the old sheet |
+| `leaderboard.js` | the HIGHSCORES page |
+| `firebase/firestore.rules` | the database's security rules — who is admin, who may write what — pasted into the Firebase console |
+| `tools/import-highscores.html` | one-off: moves the old Google Sheet into the database |
+| `tools/manage-highscores.html` | the admin's tool: edit and delete scores, ban operators, answer requests |
+| `tools/request-operator.html` | where people ask to become operators |
+| `tools/tools.css` | the look of those two pages |
 | `sketch.js` | p5 setup, the page state machine, the UI |
 | `ubitwebusb.js` | carried over from the first version, unchanged |
 | `songs/songs.json` | the list of song folders, in menu order |
