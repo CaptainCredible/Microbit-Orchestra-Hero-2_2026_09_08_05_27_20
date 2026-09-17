@@ -217,13 +217,52 @@ function layoutUI() {
   placeSong("edBack", 110);
 }
 
-// HUD text rows, measured up from the bottom edge. The bottom ~30px belong
-// to the timing drawer handle, so nothing is drawn there.
-const BAND = {
-  microbitStatus: 96,
-  songName: 74,
-  transport: 46
-};
+// Where the drawer handle is, so the readout line can keep out of its way.
+//
+// The handle is a DOM button across the middle of the very bottom, and its
+// width depends on the text it is showing. Measured rather than assumed - and
+// cached, because reading an element's box forces the browser to work out its
+// layout, which is not a thing to ask for sixty times a second.
+let drawerBox = null;
+
+function forgetDrawerBox() {
+  drawerBox = null;
+}
+
+// The top of the readout bar.
+//
+// The bar is exactly HUD_STRIP_H tall and is hung around the line of text,
+// which is itself kept clear of the drawer handle. Two consequences worth
+// knowing, and both are wanted:
+//
+//   a tall bar  reaches the bottom of the window exactly as it always did -
+//               at the original 118 this is height - 118 to the pixel.
+//
+//   a slim bar  floats just above the handle rather than hiding behind it.
+//               A 20px bar pinned to the bottom edge would be completely
+//               covered by the handle, which is 24px tall and sits there.
+function hudLineY() {
+  return Math.min(height - HUD_STRIP_H / 2, height - HUD_DRAWER_CLEARANCE);
+}
+
+function hudStripTop() {
+  return hudLineY() - HUD_STRIP_H / 2;
+}
+
+function drawerHandleBox() {
+  if (drawerBox) return drawerBox;
+
+  const handle = document.getElementById("td-handle");
+  if (!handle) return { left: width / 2, right: width / 2 };
+
+  const r = handle.getBoundingClientRect();
+  // A hidden or not-yet-laid-out handle measures zero; treated as a point in
+  // the middle rather than as a band covering the left half of the screen.
+  drawerBox = r.width
+    ? { left: r.left, right: r.right }
+    : { left: width / 2, right: width / 2 };
+  return drawerBox;
+}
 
 // One place that decides which controls exist on which page.
 const PAGE_UI = {
@@ -2045,37 +2084,68 @@ function drawVanishingPoints() {
 
 function drawHud() {
   const songTime = Tone.getTransport().seconds;
+  const connected = connectedDevice != null;
+
   push();
   noStroke();
 
   // Particles land in this strip, so the readouts get their own backdrop.
+  const y = hudLineY();
   fill(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2], 225);
-  rect(0, height - HUD_STRIP_H, width, HUD_STRIP_H);
+  rect(0, hudStripTop(), width, HUD_STRIP_H);
 
-  textAlign(LEFT, TOP);
-  textSize(12);
+  textSize(HUD_TEXT_SIZE);
 
+  // The key hints first, from the right, because where they end is where the
+  // readouts have to stop.
+  const hints = "space pause   ·   r restart   ·   esc back";
+  const handle = drawerHandleBox();
+  let hintsLeft = width - HUD_PAD;
+
+  textAlign(RIGHT, CENTER);
   fill(COLORS.dim);
-  text(currentSong ? currentSong.name : "", 22, height - BAND.songName);
-
-  fill(connectedDevice != null ? COLORS.good : COLORS.bad);
-  text(connectedDevice != null ? "micro:bit connected" : "micro:bit not connected",
-    22, height - BAND.microbitStatus);
-
-  fill(COLORS.dim);
-  text(`t ${songTime.toFixed(2)}s / ${score.duration.toFixed(1)}s`, 22, height - BAND.transport);
-  text(`sent ${sentCount}`, 220, height - BAND.transport);
-
-  if (lastSent) {
-    fill(COLORS.text);
-    textSize(15);
-    text(lastSent, 320, height - BAND.transport - 2);
+  if (width - HUD_PAD - textWidth(hints) > handle.right) {
+    text(hints, width - HUD_PAD, y);
+    hintsLeft = width - HUD_PAD - textWidth(hints);
   }
 
-  textSize(11);
-  fill(COLORS.dim);
-  textAlign(RIGHT, TOP);
-  text("space pause   ·   r restart   ·   esc back", width - 22, height - 20);
+  // Everything the readouts must not run into: the hints on one side, the
+  // drawer handle in the middle. Whichever comes first.
+  const stopAt = Math.min(hintsLeft, handle.left) - HUD_GAP;
+
+  const items = [
+    { text: connected ? "micro:bit connected" : "micro:bit not connected",
+      colour: connected ? COLORS.good : COLORS.bad },
+    { text: currentSong ? currentSong.name : "", colour: COLORS.dim },
+    { text: `t ${songTime.toFixed(2)}s / ${score.duration.toFixed(1)}s`, colour: COLORS.dim },
+    { text: `sent ${sentCount}`, colour: COLORS.dim },
+    { text: lastSent, colour: COLORS.text }
+  ];
+
+  textAlign(LEFT, CENTER);
+  let x = HUD_PAD;
+  let first = true;
+
+  for (const item of items) {
+    if (!item.text) continue;
+
+    const sep = first ? "" : `  ${HUD_SEPARATOR}  `;
+    const needed = textWidth(sep + item.text);
+    // Dropped rather than drawn over the handle. The list is in order of what
+    // is worth losing last, so a narrow window loses the tail of it.
+    if (x + needed > stopAt) break;
+
+    if (sep) {
+      fill(COLORS.dim);
+      text(sep, x, y);
+      x += textWidth(sep);
+    }
+    fill(item.colour[0], item.colour[1], item.colour[2]);
+    text(item.text, x, y);
+    x += textWidth(item.text);
+    first = false;
+  }
+
   pop();
 }
 
@@ -2496,7 +2566,7 @@ function cardAt(mx, my) {
 // menu block above. It reads the same way, and sits in the same place,
 // whichever page you are on.
 function drawMicrobitStatus() {
-  const statusY = height - BAND.transport;
+  const statusY = height - HUD_DRAWER_CLEARANCE;
 
   textAlign(CENTER, TOP);
   textSize(12);
@@ -2876,4 +2946,5 @@ function watchFullscreen() {
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   layoutUI();
+  forgetDrawerBox();
 }

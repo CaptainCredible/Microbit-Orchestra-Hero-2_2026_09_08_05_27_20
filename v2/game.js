@@ -639,7 +639,10 @@ const Visuals = {
     // the landing zone visible on a laptop screen.
     const hitY = Math.max(
       160,
-      Math.min(height * HIT_LINE_FRAC, height - HUD_STRIP_H - 20)
+      // Measured from where the bar actually is, not from the bottom edge: a
+      // slim bar floats above the drawer handle rather than sitting on the
+      // edge, so the two are no longer the same thing.
+      Math.min(height * HIT_LINE_FRAC, hudStripTop() - HUD_CLEARANCE)
     );
     const horizonY = Math.min(height * HORIZON_FRAC, hitY - 120);
     const boxW = Math.min(width * BOX_W_FRAC, 260);

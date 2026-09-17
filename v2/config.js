@@ -578,8 +578,46 @@ let DEBUG_SOUND = false;
 
 // The hit line sits above the HUD strip at the bottom, so exploding boxes
 // and the readouts do not fight for the same pixels.
-const HIT_LINE_FRAC = 0.70;   // hit line position, as a fraction of height
-const HUD_STRIP_H = 118;      // reserved height for the readouts
+const HIT_LINE_FRAC = 0.80;   // hit line position, as a fraction of height
+// The dark strip along the bottom of a playing page, and everything in it.
+//
+// Shrinking HUD_STRIP_H pulls the readouts down with it: they are one line,
+// centred in the strip, so they follow it rather than staying put.
+//
+// WHAT IT DOES NOT DO BY ITSELF is move the highway down. The hit line takes
+// the higher of two limits:
+//
+//     min(height * HIT_LINE_FRAC, height - HUD_STRIP_H - HUD_CLEARANCE)
+//
+// and at an ordinary window shape it is HIT_LINE_FRAC that decides, with the
+// strip nowhere near it. So shrinking the strip only raises the CEILING on how
+// far down the hit line is allowed to go - to actually use the room, raise
+// HIT_LINE_FRAC as well.
+//
+// The readouts are ONE horizontal line, so the strip only has to be tall
+// enough for a single row of type - about HUD_TEXT_SIZE + 8. They were three
+// stacked rows once, which needed 118.
+const HUD_STRIP_H = 20;      // reserved height for the readouts
+
+// The line itself: size, the margin from the window edges, and the space
+// either side of the separator between items.
+const HUD_TEXT_SIZE = 12;
+const HUD_PAD = 22;
+const HUD_GAP = 10;
+const HUD_SEPARATOR = "·";
+
+// Space kept clear above the bottom edge for the timing drawer's handle, which
+// is a DOM button sitting across the middle of the very bottom.
+//
+// Two things use it. The readout line will not sit lower than this, however
+// short the strip gets - underneath the handle is no place for it. And the
+// menu puts its own connection status here, so the line reads in the same
+// place whichever page you are on.
+const HUD_DRAWER_CLEARANCE = 0;
+
+// Clear air between the hit line and the top of the strip, so an exploding box
+// does not land on the readouts.
+const HUD_CLEARANCE = 20;
 
 // Fake perspective for the note highway. The lanes converge on a vanishing
 // point at HORIZON_FRAC, and a note's depth runs from 1 at the hit line to
@@ -1156,7 +1194,7 @@ const PAD_Y_SPREAD = 1.00;
 // Born at the horizon now, so it has the whole lookahead to cross rather
 // than the last third of it. Much slower than this and a pad spends its
 // entire note as a dot at the vanishing point.
-const PAD_APPROACH_SECONDS = LOOKAHEAD_SECONDS * 1.0;
+const PAD_APPROACH_SECONDS = LOOKAHEAD_SECONDS * 0.4;
 // A four-sided pyramid, drawn as a cone with four segments. The pair is the
 // base radius: the first number is the size at the note's onset, the second
 // how much more it grows to as the chord blooms.
