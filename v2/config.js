@@ -330,8 +330,8 @@ const BUTTON_POP_SHAFT_SPEED = [0.0, 0.0];
 // Milliseconds added to every micro:bit send, relative to the audible hit.
 // Positive = hardware fires later. Negative = earlier, to cover radio and
 // solenoid travel time. Tunable live from the slider during play.
-const DEFAULT_MICROBIT_OFFSET_MS = 25;
-const MICROBIT_OFFSET_RANGE = [-500, 500];
+const DEFAULT_MICROBIT_OFFSET_MS = 100;
+const MICROBIT_OFFSET_RANGE = [0, 200];
 
 // Nudges the visuals against the audio without touching either clock.
 const DEFAULT_VISUAL_OFFSET_MS = 0;
@@ -447,6 +447,17 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "24449322097",
   appId: "1:24449322097:web:c493c9926c6aa5f0475fd0"
 };
+
+// Which song a score was for, when the record does not say.
+//
+// The game did not record a song at first, so every entry from before it did
+// has none - and every one of them was the original. They are shown under this
+// name rather than under a blank, which would look like a song of its own and
+// sort to the top of the switcher.
+//
+// It has to match the song's `name` in its song.setup exactly, or the old
+// scores end up in a second list beside the new ones for the same song.
+const HIGHSCORES_DEFAULT_SONG = "The O.G.";
 
 const HIGHSCORES_COLLECTION = "highscores";          // one document per result
 const HIGHSCORES_TABLE_DOC = "highscores_meta/table";  // the published list: one read per view

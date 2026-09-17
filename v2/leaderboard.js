@@ -15,6 +15,8 @@ const Leaderboard = {
   authEl: null,
   entries: [],
   loading: false,
+  songsEl: null,
+  song: null,        // which song's list is showing; null until one is picked
 
   build() {
     if (this.root) return;
@@ -32,6 +34,10 @@ const Leaderboard = {
     back.onclick = () => setPage("STAGE_SELECT");
     head.append(title, this.filterEl, refresh, back);
 
+    // One row of buttons, one per song the list holds. Filled in by render()
+    // once the table is in, since only the table knows which songs there are.
+    this.songsEl = lbElement("div", { className: "lb-songs" });
+
     const cols = lbElement("div", { className: "lb-cols" });
     ["#", "", "name", "place", "date", "score"].forEach(t => cols.append(lbElement("span", { textContent: t })));
 
@@ -42,7 +48,7 @@ const Leaderboard = {
     this.statusEl = lbElement("span", { className: "lb-status" });
     foot.append(this.authEl, this.statusEl);
 
-    root.append(head, cols, this.listEl, foot);
+    root.append(head, this.songsEl, cols, this.listEl, foot);
     document.body.appendChild(root);
     this.root = root;
 
@@ -84,7 +90,10 @@ const Leaderboard = {
       const table = await Highscores.fetchTable();
       this.entries = table.entries;
       this.render();
-      this.say(table.missing ? "nothing published yet" : `${table.entries.length} scores`);
+      const mine = this.song ? this.entries.filter(e => e.song === this.song).length : this.entries.length;
+      this.say(table.missing
+        ? "nothing published yet"
+        : `${mine} on ${this.song || "this list"} · ${table.entries.length} in all`);
     } catch (err) {
       this.say(`can't load the list - ${err.message}`);
     } finally {
@@ -92,14 +101,25 @@ const Leaderboard = {
     }
   },
 
-  // Filtering keeps each score's global position: it narrows the list, it does
-  // not re-rank it, so "5" still means fifth of everyone.
+  // One song at a time. Positions come from Highscores.rank(), which works
+  // them out within each song - a score on a short song is not comparable with
+  // one on a long song, so a single list across all of them would be a
+  // ranking of nothing.
+  //
+  // The text filter narrows what is shown without re-ranking, so "5" still
+  // means fifth on that song.
   render() {
     if (!this.listEl) return;
+
+    this.renderSongs();
+
     const q = this.filterEl.value.trim().toLowerCase();
-    const shown = q
-      ? this.entries.filter(e => `${e.name} ${e.location}`.toLowerCase().includes(q))
+    const forSong = this.song
+      ? this.entries.filter(e => e.song === this.song)
       : this.entries;
+    const shown = q
+      ? forSong.filter(e => `${e.name} ${e.location}`.toLowerCase().includes(q))
+      : forSong;
 
     const frag = document.createDocumentFragment();
     for (const e of shown) {
@@ -129,6 +149,35 @@ const Leaderboard = {
     if (!shown.length && this.entries.length) {
       this.listEl.append(lbElement("div", { className: "lb-empty", textContent: "nothing matches" }));
     }
+  },
+
+  // The song buttons. Rebuilt from the table every render, because the set of
+  // songs is whatever the scores say it is - a song nobody has played does not
+  // appear, and one played for the first time tonight appears on its own.
+  renderSongs() {
+    const songs = Highscores.songsIn(this.entries);
+
+    // The song showing has to be one that exists. On the first load, and
+    // whenever the current one disappears, fall to the busiest - which is the
+    // one most likely to be worth looking at.
+    if (!songs.some(s => s.song === this.song)) {
+      this.song = songs.length ? songs[0].song : null;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const { song, count } of songs) {
+      const button = lbElement("button", {
+        className: "lb-song" + (song === this.song ? " lb-song-on" : ""),
+        textContent: `${song}  ${count}`,
+        title: `${count} score${count === 1 ? "" : "s"} on ${song}`
+      });
+      button.onclick = () => { this.song = song; this.render(); };
+      frag.append(button);
+    }
+    this.songsEl.replaceChildren(frag);
+
+    // One song and nothing to choose between: the row is just clutter.
+    this.songsEl.hidden = songs.length < 2;
   },
 
   renderAuth() {
@@ -191,15 +240,30 @@ const Leaderboard = {
         const role = st.admin ? "admin"
           : st.operator === "active" ? "operator"
           : st.operator === "banned" ? "banned"
+          : st.operator === undefined ? "could not read this account's status"
           : st.request && st.request.status === "pending" ? "waiting for approval"
           : st.request ? "request turned down"
-          : "not an operator";
+          : "not an operator - it cannot send scores until the admin approves it";
+
         who.textContent = `${role}: ${email}`;
+        who.title = `uid ${st.uid}`;   // what the rules match on, for the admin line
         who.classList.toggle("lb-who-bad", !st.admin && st.operator !== "active");
         rebuild.hidden = !st.admin;
         manage.hidden = !st.admin;
         requestLink.hidden = st.admin || !!st.operator || !!st.request;
-      }).catch(() => {});
+
+        if (st.unreadable.length) {
+          this.say(`signed in, but the database would not say: ${st.unreadable.join(", ")}`
+                 + " - the rules may be older than this app expects");
+        }
+      }).catch(err => {
+        // Never silent. This is the line that says why a board will not send,
+        // and swallowing its failure leaves the page looking fine while
+        // nothing works.
+        who.textContent = `signed in as ${email} - could not check what it may do`;
+        who.classList.add("lb-who-bad");
+        this.say(`could not check this account - ${err.message}`);
+      });
       return;
     }
 

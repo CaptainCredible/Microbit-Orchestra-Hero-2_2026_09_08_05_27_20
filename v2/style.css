@@ -478,6 +478,16 @@ a {
 
 #timingdrawer.td-closed .td-body { display: none; }
 
+/* Open, the handle moves ABOVE the panel so the panel itself reaches the
+   bottom edge of the screen.
+   
+   With the handle underneath - which is where it sits when closed, and rightly
+   so - the panel stopped one handle-height short of the bottom, and since the
+   handle is only 340px wide the backdrop showed through in a strip either side
+   of it. That read as a gap under the drawer. Above the panel the handle is a
+   tab on top of it, which is what it looks like anyway. */
+#timingdrawer.td-open #td-handle { order: 0; }
+
 #timingdrawer .td-row {
   flex: 1;
   max-width: 640px;
@@ -735,6 +745,36 @@ a {
   grid-template-columns: 46px 26px minmax(0, 1.3fr) minmax(0, 1fr) 84px 60px;
   gap: 8px;
   align-items: baseline;
+}
+
+/* The song switcher: one button per song the published list holds. */
+#leaderboard .lb-songs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 6px;
+}
+
+#leaderboard .lb-songs[hidden] { display: none; }
+
+#leaderboard .lb-song {
+  position: static;
+  z-index: auto;
+  font-size: 11px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-color: #2c2c3c;
+  color: #a8a8c0;
+}
+
+#leaderboard .lb-song:hover { color: #e9e9f2; }
+
+/* The one being shown. Warm rather than merely brighter, so it reads as
+   selected at a glance across a room. */
+#leaderboard .lb-song-on {
+  background: rgba(255, 176, 58, 0.16);
+  border-color: #ffb03a;
+  color: #ffd76a;
 }
 
 #leaderboard .lb-cols {

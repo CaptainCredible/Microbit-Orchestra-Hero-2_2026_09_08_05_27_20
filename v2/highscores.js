@@ -58,6 +58,7 @@ const Highscores = {
   config() { return typeof FIREBASE_CONFIG !== "undefined" ? FIREBASE_CONFIG : {}; },
   collectionName() { return typeof HIGHSCORES_COLLECTION !== "undefined" ? HIGHSCORES_COLLECTION : "highscores"; },
   tablePath() { return typeof HIGHSCORES_TABLE_DOC !== "undefined" ? HIGHSCORES_TABLE_DOC : "highscores_meta/table"; },
+  defaultSong() { return typeof HIGHSCORES_DEFAULT_SONG !== "undefined" ? HIGHSCORES_DEFAULT_SONG : "The O.G."; },
   timeout() { return typeof SCORES_TIMEOUT_SECONDS !== "undefined" ? SCORES_TIMEOUT_SECONDS : 20; },
 
   configured() {
@@ -111,13 +112,40 @@ const Highscores = {
   // followed by a 7th - and keep a stable order between them: the old sheet's
   // own order for imported rows, then earliest first for the game's.
   rank(entries) {
-    const sorted = entries.slice().sort((a, b) =>
-      (b.score - a.score) || ((a.order || 0) - (b.order || 0)));
-    let position = 0, last = null;
-    return sorted.map((e, i) => {
-      if (e.score !== last) { position = i + 1; last = e.score; }
-      return Object.assign({}, e, { position });
-    });
+    // Per song, because a position across all of them means nothing: the songs
+    // are different lengths with different numbers of notes, so a score on one
+    // is not comparable with a score on another. First on Slow Sorrow is
+    // first on Slow Sorrow.
+    const bySong = new Map();
+    for (const e of entries) {
+      const song = e.song || this.defaultSong();
+      if (!bySong.has(song)) bySong.set(song, []);
+      bySong.get(song).push(e);
+    }
+
+    const out = [];
+    for (const [song, list] of bySong) {
+      const sorted = list.slice().sort((a, b) =>
+        (b.score - a.score) || ((a.order || 0) - (b.order || 0)));
+      let position = 0, last = null;
+      sorted.forEach((e, i) => {
+        if (e.score !== last) { position = i + 1; last = e.score; }
+        out.push(Object.assign({}, e, { song, position }));
+      });
+    }
+    return out;
+  },
+
+  // The songs the list holds, each with how many scores it has, best first.
+  songsIn(entries) {
+    const counts = new Map();
+    for (const e of entries) {
+      const song = e.song || this.defaultSong();
+      counts.set(song, (counts.get(song) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([song, count]) => ({ song, count }))
+      .sort((a, b) => b.count - a.count || a.song.localeCompare(b.song));
   },
 
   //////////////////////////////////////////////////////////////////
@@ -312,6 +340,14 @@ const Highscores = {
       location: d.location || "",
       score: d.score,
       bonus: !!d.bonus,
+      // The record has carried a song all along; this is what puts it in the
+      // published list, which is the only thing a viewer ever reads. Without
+      // it here, the song might as well not have been stored.
+      //
+      // An entry from before the game recorded one falls back to the default -
+      // see HIGHSCORES_DEFAULT_SONG. Done here rather than by editing the
+      // documents, so nothing has to be migrated and a rebuild fixes itself.
+      song: d.song || this.defaultSong(),
       date: when ? localDate(when) : "",
       order: d.source === "legacy" ? (d.legacyRank || 0) : (when ? when.getTime() : Number.MAX_SAFE_INTEGER)
     };
@@ -332,13 +368,31 @@ const Highscores = {
   },
 
   async mergeIntoTable(rows) {
-    await this.patchTable(rows.map(r => this.compact(r.id, r.data)), []);
+    // appendOnly, because this is the operator's path and the rules let an
+    // operator do nothing but add to the end of the list. Anything already on
+    // it is left exactly as it is - see patchTable.
+    await this.patchTable(rows.map(r => this.compact(r.id, r.data)), [], { appendOnly: true });
   },
 
   // Changes the published list in place: `upserts` added, or replaced where
   // the id is already there, and `removeIds` taken out. One read and one
   // write however long the list is.
-  async patchTable(upserts, removeIds) {
+  // `appendOnly` is for the operator's path, and it means what the rules mean:
+  // an entry already on the published list is left alone rather than written
+  // over. Not a nicety - a rewrite is REFUSED.
+  //
+  // The rules let an operator append and nothing else, and they check it as
+  // text: everything up to the old closing bracket has to survive byte for
+  // byte. Replacing an entry in the middle fails that, and the whole write is
+  // denied with a permission error that reads like a sign-in problem.
+  //
+  // It only bites on a retry - a board whose first answer was lost, whose
+  // entries are already on the list - and it started biting the moment
+  // compact() began carrying a song, because the replacement was then a
+  // different shape from the entry it was replacing. Before that the rewrite
+  // was byte-identical and slipped through unnoticed.
+  async patchTable(upserts, removeIds, options) {
+    const appendOnly = !!(options && options.appendOnly);
     const ref = this.db.doc(this.tablePath());
     let rebuild = false;
     await this.db.runTransaction(async tx => {
@@ -357,7 +411,9 @@ const Highscores = {
       const next = current.filter(e => !removing.has(e.id));
       for (const entry of upserts) {
         const at = next.findIndex(e => e.id === entry.id);
-        if (at >= 0) next[at] = entry; else next.push(entry);
+        if (at < 0) { next.push(entry); continue; }
+        // Already published. An operator may not rewrite it; the admin may.
+        if (!appendOnly) next[at] = entry;
       }
       const data = this.tableData(next);
       if (data.json === doc.data().json) return;   // already just so - a retry
@@ -444,15 +500,30 @@ const Highscores = {
     await this.requireSignedIn();
     const uid = this.user.uid;
     try {
+      // Each part on its own, because this is the one thing that explains why
+      // a submission was refused - and it used to be all-or-nothing. Any one
+      // of these failing sank the lot, and the page then showed no role at
+      // all: the account state went blank exactly when it mattered most.
+      const settle = p => p.then(v => ({ ok: true, v }), e => ({ ok: false, e }));
       const [op, req, admin] = await withTimeout(Promise.all([
-        this.db.doc(`${OPERATORS_COLLECTION}/${uid}`).get({ source: "server" }),
-        this.db.doc(`${REQUESTS_COLLECTION}/${uid}`).get({ source: "server" }),
-        this.probeAdmin()
+        settle(this.db.doc(`${OPERATORS_COLLECTION}/${uid}`).get({ source: "server" })),
+        settle(this.db.doc(`${REQUESTS_COLLECTION}/${uid}`).get({ source: "server" })),
+        settle(this.probeAdmin())
       ]), this.timeout());
+
       return {
-        admin,
-        operator: op.exists ? op.data().status : null,
-        request: req.exists ? Object.assign({ id: req.id }, req.data()) : null
+        uid,
+        email: this.user.email || null,
+        admin: admin.ok ? admin.v : false,
+        // null means "no record"; undefined means "could not tell", which is
+        // a different thing and worth not dressing up as the first.
+        operator: op.ok ? (op.v.exists ? op.v.data().status : null) : undefined,
+        request: req.ok ? (req.v.exists ? Object.assign({ id: req.v.id }, req.v.data()) : null) : undefined,
+        unreadable: [
+          op.ok ? null : "operator record",
+          req.ok ? null : "request record",
+          admin.ok ? null : "admin check"
+        ].filter(Boolean)
       };
     } catch (err) {
       throw classify(err);
