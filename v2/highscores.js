@@ -463,7 +463,18 @@ const Highscores = {
       throw dbError("signin", authMessage(err));
     }
     this.setUser(credential.user);
-    try { await credential.user.sendEmailVerification(); } catch (err) { /* can be sent again later */ }
+
+    // The account is made either way - a verification email that will not send
+    // is not a reason to throw it away, and it can be sent again later. But it
+    // is very much a reason not to TELL somebody it is on its way when it is
+    // not: they then sit waiting for a mail that was never accepted, and the
+    // only trace is a 400 in the console nobody thinks to open.
+    try {
+      await credential.user.sendEmailVerification();
+      return { verificationSent: true, verificationError: null };
+    } catch (err) {
+      return { verificationSent: false, verificationError: authMessage(err) };
+    }
   },
 
   async sendVerification() {
@@ -852,7 +863,13 @@ function authMessage(err) {
   if (code === "auth/email-already-in-use") return "there is already an account with that email - sign in instead";
   if (code === "auth/weak-password") return "the password needs at least 6 characters";
   if (code === "auth/missing-password") return "type a password";
-  return (err && err.message) || "could not sign in";
+  if (code === "auth/unauthorized-continue-uri" || code === "auth/invalid-continue-uri") {
+    return "this site's domain is not in Firebase > Authentication > Settings > Authorized domains";
+  }
+  // The code, not just the prose. An unmapped failure is exactly the one
+  // nobody can act on without knowing which it was.
+  const message = (err && err.message) || "could not sign in";
+  return code && message.indexOf(code) === -1 ? `${message} (${code})` : message;
 }
 
 function cleanText(value, max) {

@@ -1398,6 +1398,37 @@ account and fill in their name, their school or organisation, and where they
 will run the game. A verification email goes out when the account is made,
 and the management tool shows you whether they clicked it.
 
+That email **usually lands in spam** - it comes from
+`noreply@<project>.firebaseapp.com`, which has no reputation of its own - and
+only the **newest** one works, since sending it again invalidates the last
+link. A link clicked from inside a spam folder can also be used up by the
+provider's own scanner before the person gets to it.
+
+If **every** link says "expired or already used", including a freshly sent one,
+suspect the **API key's referrer restrictions** rather than the link. Firebase's
+default handler lives at `<project>.firebaseapp.com/__/auth/action`, and it
+calls the Identity Toolkit API *from that domain*. If the browser key in Google
+Cloud Console lists only your own site, the call comes back `403
+API_KEY_HTTP_REFERRER_BLOCKED` and the handler reports its one generic failure -
+so a perfectly good code reads as expired. Sending still works, because that
+request comes from your own page. The fix is to add `<project>.firebaseapp.com/*`
+and `<project>.web.app/*` to the key's website restrictions. To tell the two
+apart without spending a link, POST a junk code and watch the status:
+
+    curl -s -X POST \
+      "https://identitytoolkit.googleapis.com/v1/accounts:update?key=$KEY" \
+      -H "Content-Type: application/json" \
+      -H "Referer: https://<project>.firebaseapp.com/" \
+      -d '{"oobCode":"nope"}'
+
+`400 INVALID_OOB_CODE` means the referrer was accepted and the code really was
+the problem. `403` means it never got that far. The same restriction blocks
+`localhost`, so sign-in from a local server fails too until it is listed.
+
+None of this blocks anything: nothing in the rules checks `emailVerified`, so
+an operator can be approved and can submit scores with an unverified address.
+The flag is there for you to judge whether an address is real.
+
 Nothing notifies you when a request arrives. Sending an email needs a server,
 or Cloud Functions, which are not on the free plan. The management tool's
 **requests** tab shows how many are waiting.

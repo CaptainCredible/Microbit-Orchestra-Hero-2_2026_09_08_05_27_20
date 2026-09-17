@@ -37,6 +37,19 @@
       <button id="recheck" type="button">I have clicked the link</button>
       <button id="signout" type="button">sign out</button>
     </div>
+    <p class="note">
+      <b>Check your spam folder.</b> The mail comes from
+      <code>noreply@mbohscores.firebaseapp.com</code>, which mail providers
+      often treat as junk. Searching for <code>mbohscores</code> finds it
+      faster than scrolling.
+    </p>
+    <p class="note">
+      <b>Use the newest email only.</b> Sending it again makes the previous
+      link stop working - an older one will say it has expired or been used
+      already. It also helps to move the mail out of spam before clicking,
+      since some providers follow links in junk mail to check them, and that
+      uses the link up before you get there.
+    </p>
   </div>
   <p id="account-status" class="note status"></p>
 
@@ -108,8 +121,15 @@
     say("account-status", mode === "new" ? "creating your account…" : "signing in…");
     try {
       if (mode === "new") {
-        await Highscores.createAccount(email, $("password").value);
-        say("account-status", `Account made. A verification email is on its way to ${email} - the link in it confirms the address is yours.`, "good");
+        const made = await Highscores.createAccount(email, $("password").value);
+        if (made.verificationSent) {
+          say("account-status", `Account made. A verification email is on its way to ${email} - the link in it confirms the address is yours. Check your spam folder; it often lands there.`, "good");
+        } else {
+          // Said plainly, because the account IS made and the next step is a
+          // real one - not a shrug.
+          say("account-status", `Account made, but the verification email could not be sent: ${made.verificationError}.`
+            + ` You can still ask to be an operator; the admin can approve you without it.`, "bad");
+        }
       } else {
         await Highscores.signIn(email, $("password").value);
         say("account-status", "");
@@ -122,7 +142,10 @@
   };
 
   $("resend").onclick = async () => {
-    try { await Highscores.sendVerification(); say("account-status", "verification email sent", "good"); }
+    try {
+      await Highscores.sendVerification();
+      say("account-status", "Verification email sent - check your spam folder. Only the link in this newest email will work.", "good");
+    }
     catch (err) { say("account-status", err.message, "bad"); }
   };
 
