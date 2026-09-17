@@ -164,10 +164,10 @@ void render(out vec4 fragColor, in vec2 fragCoord){
     ro.z += iTime * FLY_SPEED;
 
     bool click = iMouse.z > 0.0;
-    if (click){
-        ro.yz *= rot(2.0 * min(iMouse.y / iResolution.y - 0.5, 0.15));
-        ro.zx *= rot(-7.0 * (iMouse.x / iResolution.x - 0.5));
-    }
+    //if (click){
+    //    ro.yz *= rot(2.0 * min(iMouse.y / iResolution.y - 0.5, 0.15));
+    //    ro.zx *= rot(-7.0 * (iMouse.x / iResolution.x - 0.5));
+    //}
 
     vec3 lk = vec3(0.0, 2.0, 0.0);
     lk.y += CAM_PITCH * 3.0;

@@ -889,14 +889,26 @@ async function loadStageList() {
 
   const folders = await loadSongManifest();
 
-  for (const id of folders) {
+  // Every folder at once, not one after another.
+  //
+  // The songs do not depend on each other, and each one is a dozen or more
+  // requests. Run in series that is every round trip of every song stacked end
+  // to end, which off a local disk is nothing and over a real network is most
+  // of the wait on a first visit - measured at six and a half seconds against
+  // a server 30ms away.
+  const loaded = await Promise.all(folders.map(async entry => {
     try {
-      const song = await loadSongFolder(id);
-      if (song) stageList.push(song);
+      return await loadSongFolder(entry);
     } catch (err) {
-      loadError = `songs/${id}: ${err.message}`;
+      loadError = `songs/${entry.id}: ${err.message}`;
+      return null;
     }
-  }
+  }));
+
+  // In the order the manifest lists them, not the order they happened to
+  // finish - the manifest's order is the menu's order, and racing would
+  // shuffle the cards differently on every visit.
+  stageList = loaded.filter(Boolean);
 
   // Nothing fetched at all - opened off the filesystem, most likely, where
   // Chrome blocks every fetch. The songs compiled into songs.js are the
@@ -919,7 +931,14 @@ async function loadSongManifest() {
     // because it is the other obvious thing to write.
     const names = Array.isArray(list) ? list : (list && list.songs);
     if (!Array.isArray(names)) throw new Error("not a list of folder names");
-    return names.filter(n => typeof n === "string" && n.length);
+
+    // Two shapes, both fine. A plain name is a folder to go and look through,
+    // the way it has always worked - drop a folder in, add its name, done.
+    // An object is a folder somebody has already looked through for us, and
+    // then nothing is guessed at: see tools/build-songs-json.py.
+    return names
+      .map(entry => (typeof entry === "string" ? { id: entry } : entry))
+      .filter(entry => entry && typeof entry.id === "string" && entry.id.length);
   } catch (err) {
     return [];
   }
@@ -928,19 +947,45 @@ async function loadSongManifest() {
 // One song folder: song.setup, then a .mid per part. Every part is optional -
 // a song with nothing but Drums.mid is a song - but a folder with no parts at
 // all is not, and says so rather than appearing as a silent card.
-async function loadSongFolder(id) {
-  const setup = await loadSongSetup(id);
+async function loadSongFolder(entry) {
+  const id = entry.id;
+
+  // A manifest entry carrying a `parts` map has been written by somebody who
+  // could actually see the folder, so nothing here is guessed: each file is
+  // asked for once, by name, and a part that is not listed is a part the song
+  // does not have and is never asked for at all.
+  //
+  // Without one, every name is a guess and the misses are what they always
+  // were. tools/build-songs-json.py is what turns the first into the second.
+  const declared = !!entry.parts && typeof entry.parts === "object";
+
+  const partNames = part => {
+    if (!declared) return songFileNames(part.file);
+    const named = entry.parts[part.voice];
+    return named ? [named] : [];            // [] asks for nothing
+  };
+
+  // The setup, the four parts and the sounds all at once. Nothing here needs
+  // anything else here: the setup is only wanted once the parts are in hand,
+  // and the parts do not care what it says. Waiting for each in turn was
+  // costing a round trip apiece for no reason at all.
+  const [setup, hits, sounds] = await Promise.all([
+    loadSongSetup(id, declared ? (entry.setup ? [entry.setup] : []) : SONG_SETUP_FILES),
+    Promise.all(SONG_PARTS.map(part => fetchFirstMidi(`songs/${id}`, partNames(part)))),
+    loadSongSounds(id, declared ? (entry.sounds ? [entry.sounds] : []) : SOUND_SETTINGS_FILES)
+  ]);
+
   const parts = {};
   const found = [];
 
-  for (const part of SONG_PARTS) {
-    const hit = await fetchFirstMidi(`songs/${id}`, songFileNames(part.file));
+  SONG_PARTS.forEach((part, i) => {
+    const hit = hits[i];
     parts[part.voice] = hit ? hit.midi : null;
     // The name it was actually found under, not the one that was looked for -
     // if a part loaded because of the case-insensitive fallback, the line on
     // the console should say so rather than quietly reporting the tidy name.
     if (hit) found.push(hit.name);
-  }
+  });
 
   if (!found.length) throw new Error("no .mid files in the folder");
 
@@ -962,7 +1007,6 @@ async function loadSongFolder(id) {
                 (score.warnings.length > 1 ? ` (+${score.warnings.length - 1} more)` : "");
   }
 
-  const sounds = await loadSongSounds(id);
 
   // The sounds used to live in song.setup and do not any more. Silently
   // ignoring a block left behind there would be the worst of both: the song
@@ -1037,8 +1081,8 @@ function unknownSetupKeys(setup) {
 // folder unchanged. Absent is normal and means the defaults; broken is
 // reported, because a typo that quietly reverted a whole song's sound would
 // be very hard to spot.
-async function loadSongSounds(id) {
-  for (const name of SOUND_SETTINGS_FILES) {
+async function loadSongSounds(id, names) {
+  for (const name of names) {
     let text = null;
     try {
       const response = await fetch(`songs/${id}/${name}`);
@@ -1060,7 +1104,7 @@ async function loadSongSounds(id) {
 // it just has no name of its own and no sounds. A *broken* one is different,
 // and is reported rather than swallowed: a typo in the JSON that silently
 // reverted the whole song to defaults would be very hard to spot.
-async function loadSongSetup(id) {
+async function loadSongSetup(id, names) {
   // Every accepted spelling, not just the canonical one. SONG_SETUP_FILES has
   // always listed these and the zip reader has always honoured them; the
   // folder reader used to ask for "song.setup" and nothing else, so a folder
@@ -1069,7 +1113,7 @@ async function loadSongSetup(id) {
   let text = null;
   let found = null;
 
-  for (const name of SONG_SETUP_FILES) {
+  for (const name of names) {
     try {
       const response = await fetch(`songs/${id}/${name}`);
       if (!response.ok) continue;
@@ -1082,11 +1126,14 @@ async function loadSongSetup(id) {
   if (found === null) {
     // Not an error: a folder with no setup still plays, it just has no name of
     // its own. Worth a line all the same, because the other reason to see this
-    // is a setup that is there under a name nothing looks for.
-    console.info(`songs/${id}: no song.setup - tried ${SONG_SETUP_FILES.join(", ")}`);
+    // is a setup that is there under a name nothing looks for. Silent when the
+    // manifest already said there was none - that is not news.
+    if (names.length) {
+      console.info(`songs/${id}: no song.setup - tried ${names.join(", ")}`);
+    }
     return {};
   }
-  if (found !== SONG_SETUP_FILES[0]) {
+  if (found !== names[0]) {
     console.info(`songs/${id}: read its setup from ${found}`);
   }
 
@@ -2574,7 +2621,7 @@ function drawStageSelect() {
     // them, and the warning is the more urgent.
     fill(COLORS.dim);
     textSize(11);
-    text(song.blurb, x + 16, y + 32, L.cardW - 32, warn ? 14 : 26);
+    text(song.blurb, x + 16, y + 38, L.cardW - 32, warn ? 14 : 26);
 
     if (warn) {
       fill(COLORS.bad);

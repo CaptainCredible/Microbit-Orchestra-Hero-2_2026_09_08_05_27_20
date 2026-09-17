@@ -1,5 +1,34 @@
-[
-  "calibration",
-  "The-OG",
-  "slow-sorrow"
-]
+{
+  "songs": [
+    {
+      "id": "calibration",
+      "setup": "song.setup",
+      "parts": {
+        "drums": "Drums.mid"
+      },
+      "sounds": null
+    },
+    {
+      "id": "The-OG",
+      "setup": "song-setup.txt",
+      "parts": {
+        "drums": "Drums.mid",
+        "pads": "Pads.mid",
+        "bass": "Bass.mid",
+        "keys": "Keys.mid"
+      },
+      "sounds": "sound-settings.txt"
+    },
+    {
+      "id": "slow-sorrow",
+      "setup": "song-setup.txt",
+      "parts": {
+        "drums": "Drums.mid",
+        "pads": "Pads.mid",
+        "bass": "Bass.mid",
+        "keys": "Keys.mid"
+      },
+      "sounds": "sound-settings.txt"
+    }
+  ]
+}
