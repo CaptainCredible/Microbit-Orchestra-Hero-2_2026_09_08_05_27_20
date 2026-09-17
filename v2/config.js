@@ -465,6 +465,41 @@ const HIGHSCORES_TABLE_DOC = "highscores_meta/table";  // the published list: on
 const SCORES_TIMEOUT_SECONDS = 20;   // how long to wait for the database to answer
 const SCORES_RETRY_SECONDS = 60;     // how often to retry while anything is waiting
 
+// ---- telling somebody they have been approved ------------------------------
+//
+// Firebase does not send this one. The Spark plan sends exactly two mails, the
+// verification and the password reset, both from fixed templates; a mail of
+// your own needs Cloud Functions or the Trigger Email extension, and both of
+// those want the Blaze plan and a card on file.
+//
+// So the manage tool writes it and hands it to YOUR mail client, already
+// addressed and filled in, and you press send. One extra click, and better
+// post than the free version would have been: it arrives from a real person at
+// a real domain instead of noreply@<project>.firebaseapp.com, which is the
+// address that keeps landing in everyone's spam folder, and a reply comes back
+// to you rather than into a void.
+//
+// {name} {email} {url} are filled in; {url} is worked out from where the tool
+// is being served, so it is right on a local copy and on the deployed site
+// without being written down anywhere.
+const OPERATOR_WELCOME_AUTO = true;   // false: don't open the mail client on approve,
+                                      // just leave the button to press
+
+const OPERATOR_WELCOME_SUBJECT = "You can now send micro:bit Orchestra Hero highscores";
+
+const OPERATOR_WELCOME_BODY = `Hi {name},
+
+Your request to become a highscore operator has been approved.
+
+Open the game and go to the HIGHSCORES page, then sign in with {email} and the
+password you chose when you asked. Scores from your sessions will go to the
+global list from then on.
+
+{url}
+
+If it does not work, or you need anything, just reply to this email.
+`;
+
 // How long a melodic note rings when the editor previews it on click - long
 // enough to identify the pitch, short enough that clicking through a run of
 // cells does not pile up overlapping tails. Drum previews need no duration;

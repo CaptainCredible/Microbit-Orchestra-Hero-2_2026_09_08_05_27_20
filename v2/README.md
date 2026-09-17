@@ -1433,6 +1433,23 @@ Nothing notifies you when a request arrives. Sending an email needs a server,
 or Cloud Functions, which are not on the free plan. The management tool's
 **requests** tab shows how many are waiting.
 
+Approving somebody does not notify them either - it changes a document in a
+database they are not looking at - so **approve** opens a welcome message in
+your own mail client, addressed and written, and you press send. The wording
+is `OPERATOR_WELCOME_SUBJECT` and `OPERATOR_WELCOME_BODY` in config.js, where
+`{name}`, `{email}` and `{url}` are filled in; `{url}` is worked out from where
+the tool is being served, so there is no address to keep in step. Set
+`OPERATOR_WELCOME_AUTO` to `false` if you would rather the mail client did not
+open by itself - the **operators** tab has an **email them** button on every
+active operator, which does the same thing whenever you want it.
+
+Doing it by hand is the free option, but it is also the better post. It arrives
+from a real person at a real domain rather than
+`noreply@<project>.firebaseapp.com`, so it does not get filed as junk the way
+the verification mail does, and a reply reaches you. Automating it properly
+means the Blaze plan: Cloud Functions, or the **Trigger Email from Firestore**
+extension pointed at an SMTP account. Both want a card on file.
+
 Once approved, they sign in on the game's highscores page with the same email
 and password. The footer there says where an account stands: *admin*,
 *operator*, *waiting for approval*, *request turned down*, *not an operator*

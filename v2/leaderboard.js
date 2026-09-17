@@ -189,7 +189,7 @@ const Leaderboard = {
 
     const requestLink = lbElement("a", {
       className: "lb-link", href: "tools/request-operator.html", target: "_blank", rel: "noopener",
-      textContent: "request operator access"
+      textContent: "request operator access to be able to submit scores"
     });
 
     if (Highscores.user) {

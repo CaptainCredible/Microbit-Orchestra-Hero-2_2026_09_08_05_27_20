@@ -856,7 +856,7 @@ a {
 #leaderboard .lb-signin { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 #leaderboard .lb-who { font-size: 11px; color: #9a9ab5; }
 #leaderboard .lb-who.lb-who-bad { color: #ff8a70; }
-#leaderboard .lb-link { font-size: 11px; color: #ffb03a; }
+#leaderboard .lb-link { font-size: 11px; color: #ffb03a; margin-left: 10px; }
 #leaderboard .lb-link:hover { color: #ffd76a; }
 #leaderboard .lb-link[hidden] { display: none; }
 #leaderboard .lb-status { margin-left: auto; font-size: 11px; color: #9a9ab5; text-align: right; }

@@ -25,7 +25,20 @@
     <div class="box">
       <form id="account-form" class="row">
         <input id="email" type="email" placeholder="email" autocomplete="username" required>
-        <input id="password" type="password" placeholder="password (6+ characters)" autocomplete="new-password" required>
+        <span class="pw">
+          <input id="password" type="password" placeholder="password (6+ characters)" autocomplete="new-password" required>
+          <button id="password-eye" type="button" class="eye" aria-pressed="false"
+                  title="show the password" aria-label="show the password">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M1.6 12S5.6 5.2 12 5.2 22.4 12 22.4 12 18.4 18.8 12 18.8 1.6 12 1.6 12Z"/>
+              <circle cx="12" cy="12" r="3.1"/>
+              <path class="eye-slash" d="M3.5 3.5 20.5 20.5"/>
+            </svg>
+          </button>
+        </span>
+        <span class="pw" id="confirm-wrap">
+          <input id="confirm" type="password" placeholder="type the password again" autocomplete="new-password" required>
+        </span>
         <button id="account-go" type="submit" class="primary">create account</button>
       </form>
     </div>
@@ -68,6 +81,14 @@
       </label>
       <div class="bar"><button id="request-go" type="submit" class="primary">send request</button></div>
     </form>
+    <p class="note">
+      <b>You will get an email when it is approved.</b> It comes from the admin
+      personally, not from the game, so look out for a normal message rather
+      than anything automatic - and <b>check your spam folder</b>, since a
+      first message from an unfamiliar address often lands there. There is no
+      set waiting time; a person has to read your request. You can also come
+      back to this page at any time and it will tell you where things stand.
+    </p>
     <p id="request-status" class="note status"></p>
   </section>
 </main>
@@ -85,12 +106,51 @@
 
   function setMode(next) {
     mode = next;
-    $("mode-new").classList.toggle("on", next === "new");
-    $("mode-existing").classList.toggle("on", next !== "new");
-    $("account-go").textContent = next === "new" ? "create account" : "sign in";
-    $("password").setAttribute("autocomplete", next === "new" ? "new-password" : "current-password");
+    const making = next === "new";
+    $("mode-new").classList.toggle("on", making);
+    $("mode-existing").classList.toggle("on", !making);
+    $("account-go").textContent = making ? "create account" : "sign in";
+    $("password").setAttribute("autocomplete", making ? "new-password" : "current-password");
+
+    // Signing in needs no confirmation - you already know the password, and
+    // one you type wrong is told to you straight away. Disabled as well as
+    // hidden: a hidden input that is still `required` blocks the form with a
+    // message nobody can see, and would be sent along with it besides.
+    $("confirm-wrap").hidden = !making;
+    $("confirm").disabled = !making;
+    $("confirm").value = "";
+    checkMatch();
     say("account-status", "");
   }
+
+  //////////////////////////////////////////////////////////////////
+  // the password
+  //////////////////////////////////////////////////////////////////
+
+  // A new password is typed blind and never read back: get it wrong and the
+  // account exists with a password nobody knows, which takes a reset email to
+  // undo - and the reset email is the part of this that already gives trouble.
+  // Hence typing it twice, and being able to look at it.
+  function checkMatch() {
+    const confirm = $("confirm");
+    // Nothing to compare while it is empty; `required` covers that case, and
+    // complaining before they have finished typing is just nagging.
+    const wrong = !confirm.disabled && confirm.value && confirm.value !== $("password").value;
+    confirm.setCustomValidity(wrong ? "The two passwords are not the same." : "");
+  }
+  $("password").addEventListener("input", checkMatch);
+  $("confirm").addEventListener("input", checkMatch);
+
+  $("password-eye").onclick = () => {
+    const eye = $("password-eye");
+    const show = $("password").type === "password";
+    for (const id of ["password", "confirm"]) $(id).type = show ? "text" : "password";
+    eye.classList.toggle("on", show);
+    eye.setAttribute("aria-pressed", String(show));
+    const label = show ? "hide the password" : "show the password";
+    eye.title = label;
+    eye.setAttribute("aria-label", label);
+  };
   $("mode-new").onclick = () => setMode("new");
   $("mode-existing").onclick = () => setMode("existing");
 
@@ -120,6 +180,16 @@
     $("account-go").disabled = true;
     say("account-status", mode === "new" ? "creating your account…" : "signing in…");
     try {
+      if (mode === "new" && $("password").value !== $("confirm").value) {
+        // checkMatch runs on `input`, and a password manager that fills both
+        // boxes without firing one would walk straight past it. The cost of
+        // being wrong here is an account with an unknown password, so it is
+        // worth asking twice.
+        say("account-status", "The two passwords are not the same - type the second one again.", "bad");
+        $("confirm").focus();
+        $("confirm").select();
+        return;
+      }
       if (mode === "new") {
         const made = await Highscores.createAccount(email, $("password").value);
         if (made.verificationSent) {
@@ -176,7 +246,7 @@
         state.textContent = "This is the admin account - it can already do everything.";
       } else if (st.operator === "active") {
         state.className = "box good";
-        state.textContent = "You are an operator. Sign in on the game's highscores page with this email and password to send scores.";
+        state.textContent = "You are an operator - there is an email about it too, possibly in your spam folder. Sign in on the game's highscores page with this email and password to send scores.";
       } else if (st.operator === "banned") {
         state.className = "box bad";
         state.textContent = "This account's operator access has been withdrawn. Contact the admin if you think that is a mistake.";
@@ -185,7 +255,7 @@
         state.textContent = "This request was turned down. Contact the admin directly if you would like to ask again.";
       } else if (st.request) {
         state.className = "box warn";
-        state.textContent = "Your request is waiting for the admin. You can change it below.";
+        state.textContent = "Your request is waiting for the admin. You will get an email when it is approved - it may land in spam. You can change it below.";
         $("name").value = st.request.name || "";
         $("organisation").value = st.request.organisation || "";
         $("message").value = st.request.message || "";
@@ -215,7 +285,7 @@
         organisation: $("organisation").value,
         message: $("message").value
       });
-      say("request-status", "Sent. The admin will look at it - come back to this page to see the answer.", "good");
+      say("request-status", "Sent. The admin will read it and email you when it is approved - check your spam folder for it. You can also come back to this page to see the answer.", "good");
       refreshState();
     } catch (err) {
       say("request-status", err.message, "bad");

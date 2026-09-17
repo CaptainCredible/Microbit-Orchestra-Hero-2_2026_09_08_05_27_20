@@ -38,6 +38,38 @@ button.danger { border-color: #7a3030; }
 button.danger:hover { background: #3a1414; border-color: #c04040; }
 
 form.row, .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* A password box with a reveal button sitting inside its right-hand end. The
+   wrapper is what the flex row lays out, so the button travels with the field
+   instead of becoming a fourth thing that can wrap onto its own line. */
+.pw { position: relative; display: inline-flex; align-items: center; }
+.pw input { padding-right: 32px; }
+
+.pw .eye {
+  position: absolute;
+  right: 2px; top: 2px; bottom: 2px;
+  width: 27px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: #7a7a96;
+}
+.pw .eye:hover { background: #22222e; border: none; color: #ffb03a; }
+.pw .eye.on { color: #ffb03a; }
+.pw .eye svg {
+  width: 17px; height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+/* Plain eye while the password is hidden - the button offers to show it.
+   Struck through once it is showing, which is the offer to hide it again. */
+.pw .eye .eye-slash { display: none; }
+.pw .eye.on .eye-slash { display: inline; }
 form.stack { display: grid; gap: 10px; }
 form.stack label { display: grid; gap: 4px; color: #b8b8cc; font-size: 13px; }
 

@@ -97,6 +97,56 @@
   }
 
   //////////////////////////////////////////////////////////////////
+  // the welcome email
+  //////////////////////////////////////////////////////////////////
+  //
+  // Approving somebody changes a document in a database they are not looking
+  // at. Nothing tells them, and on the free plan nothing can - see
+  // OPERATOR_WELCOME_* in config.js for why. This writes the mail and hands it
+  // to the mail client; sending it is still a person's job.
+
+  // Where the game lives, from where this tool is being served. The tool sits
+  // in tools/, so the game is one level up - true on a local copy and on the
+  // deployed site, with no address to keep in step.
+  function gameUrl() {
+    return new URL("../index.html", location.href).href;
+  }
+
+  function welcomeHref(person) {
+    const fill = text => String(text || "")
+      .replace(/\{name\}/g, (person.name || "").trim() || "there")
+      .replace(/\{email\}/g, person.email || "")
+      .replace(/\{url\}/g, gameUrl());
+    // encodeURIComponent, not encodeURI: the body has newlines, & and ? in it,
+    // and encodeURI leaves those alone, which ends the mailto early and loses
+    // everything after the first one.
+    return "mailto:" + encodeURIComponent(person.email || "")
+      + "?subject=" + encodeURIComponent(fill(OPERATOR_WELCOME_SUBJECT))
+      + "&body=" + encodeURIComponent(fill(OPERATOR_WELCOME_BODY));
+  }
+
+  // An anchor that is clicked, rather than location.href: handing the browser
+  // a mailto: it has no handler for is allowed to do nothing at all, and doing
+  // nothing to a link leaves the page where it was, while doing nothing to a
+  // navigation can take the tool with it.
+  function openMail(person) {
+    const a = document.createElement("a");
+    a.href = welcomeHref(person);
+    a.rel = "noopener";
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+
+  // The button, for when the mail client did not open, or it needs sending
+  // again later.
+  function mailButton(person, label) {
+    return el("button", { type: "button", textContent: label || "email them",
+      title: "opens your mail client with the welcome message already written",
+      onclick: () => openMail(person) });
+  }
+
+  //////////////////////////////////////////////////////////////////
   // signing in
   //////////////////////////////////////////////////////////////////
 
@@ -354,6 +404,7 @@
         const statusClass = o.status === "active" ? "good" : o.status === "banned" ? "bad" : "warn";
         const actions = el("td", { class: "actions" });
         if (o.uid !== me && o.status === "active") {
+          actions.append(mailButton(o));
           actions.append(el("button", { type: "button", class: "danger", textContent: "ban",
             onclick: async () => {
               if (!confirm(`Ban ${o.email}? They will not be able to send scores. Their existing scores stay unless you delete them.`)) return;
@@ -413,7 +464,18 @@
         if (r.status === "pending") {
           actions.append(
             el("button", { type: "button", class: "primary", textContent: "approve",
-              onclick: async () => { if (await act("approving", () => Highscores.approveRequest(r.uid), `${r.email} is now an operator`) !== undefined) await reload(); } }),
+              onclick: async () => {
+                if (await act("approving", () => Highscores.approveRequest(r.uid),
+                              `${r.email} is now an operator` + (OPERATOR_WELCOME_AUTO
+                                ? " - the welcome email is waiting in your mail client"
+                                : " - use \u201cemail them\u201d on the operators tab to tell them")) === undefined) return;
+                // Before the reload: that redraws this row away, and the click
+                // that is still counting as a gesture is what lets a mailto
+                // through. The row carries everything the message needs, so
+                // there is nothing to wait for the database to confirm.
+                if (OPERATOR_WELCOME_AUTO) openMail(r);
+                await reload();
+              } }),
             el("button", { type: "button", class: "danger", textContent: "turn down",
               onclick: async () => {
                 if (!confirm(`Turn down ${r.email}? They will not be able to ask again unless you delete the request.`)) return;
