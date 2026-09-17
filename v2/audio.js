@@ -497,24 +497,24 @@ const AudioEngine = {
 
     for (const n of score.drums) {
       Tone.getTransport().schedule((time) => {
-        this.drum(n.drum, time, n.velocity);
+        Perf.time("audio", () => this.drum(n.drum, time, n.velocity));
       }, n.time + offset);
     }
     for (const n of score.pads) {
       Tone.getTransport().schedule((time) => {
-        this.pad(n.midi, n.duration, time, n.velocity * 0.7);
+        Perf.time("audio", () => this.pad(n.midi, n.duration, time, n.velocity * 0.7));
       }, n.time + offset);
     }
     for (const n of score.basskeys) {
       if (n.voice === "bass") continue;
       Tone.getTransport().schedule((time) => {
-        this.keysNote(n.midi, n.duration, time, n.velocity);
+        Perf.time("audio", () => this.keysNote(n.midi, n.duration, time, n.velocity));
       }, n.time + offset);
     }
 
     for (const n of this._monoBass(score.basskeys)) {
       Tone.getTransport().schedule((time) => {
-        this.bassNote(n.midi, n.duration, time, n.velocity);
+        Perf.time("audio", () => this.bassNote(n.midi, n.duration, time, n.velocity));
       }, n.time + offset);
     }
   },

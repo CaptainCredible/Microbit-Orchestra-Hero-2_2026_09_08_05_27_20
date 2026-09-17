@@ -1,0 +1,35 @@
+void mainImage(out vec4 o, vec2 u) {
+    // d and s were left uninitialised and o was only multiplied by 1 - which
+    // works on Shadertoy because it happens to hand you zeroes, and is
+    // undefined everywhere else. Set them, so the picture is the same picture
+    // on every machine.
+    float d = 0.0, s = 0.0, t = iTime;
+    o = vec4(0.0);
+
+    // Declared in the init, not before it. GLSL ES 1.00 accepts only one shape
+    // of for-loop - Appendix A of the spec - and "the index is declared here"
+    // is part of it; `for (i = 1.0; ...)` with i declared above is refused.
+    //
+    // 1.0 and 15.0, not 1 and 15, for the same reason the init matters: there
+    // is no implicit int-to-float, so an int literal is an error not a promotion.
+    for (float i = 1.0; i < 15.0; i += 1.0) {
+        vec3 p = d * normalize(vec3(u + u, 0.0) - iResolution.xyy);
+        p.z -= t;
+        // A counted loop, because GLSL ES 1.00 only allows an index stepped by
+        // a constant - `s *= 1.42` is not a form it accepts. So the geometric
+        // series is computed from the count instead. 0.1 * 1.42^k first passes
+        // 2.0 at k = 9, which is where the original stopped.
+        for (float k = 0.0; k < 9.0; k += 1.0) {
+            s = 0.1 * pow(1.42, k);
+            p -= dot(cos(t + p * s * 16.0), vec3(0.01)) / s;
+            p += sin(p.yzx * 0.9) * 0.3;
+        }
+        d += s = 0.02 + abs(3.0 - length(p.yx)) * 0.1;
+        o += (1.0 + cos(d + vec4(4.0, 2.0, 1.0, 0.0))) / s;
+    }
+    // tanh() arrived in GLSL ES 3.00, so it is written out. This form rather
+    // than (e^2x - 1)/(e^2x + 1) because it cannot overflow: a large x sends
+    // the exponential to infinity and 2/inf is simply 0, giving 1.
+    vec4 e = exp(2.0 * (o / 2e3));
+    o = 1.0 - 2.0 / (e + 1.0);
+}

@@ -40,7 +40,7 @@ const Ambient3D = {
         this.p = p;
         this.ready = true;
       };
-      p.draw = () => this.render(p);
+      p.draw = () => Perf.time("3d shapes", () => this.render(p));
       p.windowResized = () => p.resizeCanvas(window.innerWidth, window.innerHeight);
     });
   },
@@ -413,13 +413,25 @@ const Ambient3D = {
   },
 
   render(p) {
-    p.background(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2]);
+    const playing = page === "GAME" || page === "PAUSE" || page === "END";
+
+    // With a backdrop video running this layer is the middle of three, and
+    // painting its own background would bury the video under it - so it is
+    // left transparent and the backdrop becomes what you see through the
+    // shapes. Without one it paints the background itself, as it always did.
+    //
+    // showing() is already false on any page with no backdrop, so this does
+    // not need to know which pages those are.
+    //
+    // p5 makes a WEBGL canvas with alpha: true, so clear() really is
+    // see-through rather than black.
+    if (Backdrop.showing()) p.clear();
+    else p.background(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2]);
 
     // Before anything is placed: every position below is worked out from
     // eyeZ(p), so the camera has to actually be there.
     this.aimCamera(p);
 
-    const playing = page === "GAME" || page === "PAUSE" || page === "END";
     if (!playing || !score) return;
 
     const songTime = songTimeNow;

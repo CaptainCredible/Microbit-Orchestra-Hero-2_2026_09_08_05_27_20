@@ -66,6 +66,42 @@ const BASS_KEYS_SPLIT = 48; // C3
 // order in it is the order they appear on the menu.
 const SONGS_MANIFEST = "songs/songs.json";
 
+// The song's setup, as written in a folder. A dropped zip is allowed the
+// other obvious spellings as well: a zip arrives from someone else's machine,
+// where the file was named from memory rather than copied from a sibling
+// folder, and a song that silently lost its name and tempo over a hyphen is a
+// bad way to find out. Matched case-insensitively, so these are lowercase.
+// What a song.setup may say about its backdrop.
+//
+// Several spellings for the one thing, because "video" was the name before a
+// backdrop could be a shader and it is the wrong word now - but every song
+// already written says it, so it keeps working. `backdrop` is the name to use.
+const SONG_BACKDROP_KEYS = ["backdrop", "background", "shader", "video"];
+const SONG_BACKDROP_DIM_KEYS = ["backdropDim", "videoDim"];
+const SONG_BACKDROP_BRIGHTNESS_KEYS = ["backdropBrightness", "videoBrightness"];
+const SONG_BACKDROP_CONTRAST_KEYS = ["backdropContrast", "videoContrast"];
+
+// Every key a song.setup is allowed to have. Anything else in the file is a
+// typo or a leftover from an older version, and is REPORTED rather than
+// quietly skipped - a setting that does nothing and says nothing is a very
+// long afternoon.
+const SONG_SETUP_KEYS = ["name", "bpm", "blurb", "sounds"]
+  .concat(SONG_BACKDROP_KEYS)
+  .concat(SONG_BACKDROP_DIM_KEYS)
+  .concat(SONG_BACKDROP_BRIGHTNESS_KEYS)
+  .concat(SONG_BACKDROP_CONTRAST_KEYS);
+
+// Exact spellings, canonical first. A folder is read over http, where the
+// server cares about capital letters, so these are tried as written - the
+// first one that answers wins and the rest are never asked for. A song using
+// the canonical name costs exactly one request.
+//
+// (Inside a zip it does not matter: those names are matched case-insensitively,
+// because a zip carries its own directory and there is nothing to ask.)
+const SONG_SETUP_FILES = [
+  "song.setup", "song-setup.txt", "songSetup.txt", "song_setup.txt", "setup.txt"
+];
+
 // The song's sounds, as a file of its own beside the parts.
 //
 // It is *exactly* what the sound panel's "export settings" button produces -
@@ -73,13 +109,16 @@ const SONGS_MANIFEST = "songs/songs.json";
 // press d, move sliders, press "export settings", paste over this file. No
 // reformatting, no picking bits out, no quoting.
 //
-// Several spellings are tried for the same reason the part files have
-// several: a web server cares about capital letters and a hyphen, and nobody
-// else does.
+// A few spellings are tried, for the same reason the part files have a few:
+// a web server cares about capital letters and a hyphen, and nobody else does.
+//
+// Only a few, though. Every spelling that is not there is a request that has
+// to go out and come back 404 - which is free off a local disk and is not free
+// at all off a web server, where it is a round trip per guess and, on a host
+// that redirects its 404s, a CORS error in the console for each one. The
+// canonical name is the first entry and is what to use.
 const SOUND_SETTINGS_FILES = [
-  "sound-settings.txt", "sound_settings.txt", "sound settings.txt",
-  "sound-settings.js", "sound-settings.json", "sounds.txt",
-  "Sound-Settings.txt", "SOUND-SETTINGS.TXT"
+  "sound-settings.txt", "sound_settings.txt", "sounds.txt"
 ];
 
 // What a MIDI reader assumes when a file carries no tempo of its own. It is
@@ -161,6 +200,132 @@ const COUNT_IN_SNAP = 0.16;          // seconds to settle from there
 // How much of the beat is spent fading out, as a fraction. The number is gone
 // before the next one lands, so two are never on screen at once.
 const COUNT_IN_FADE = 0.45;
+
+// THE A AND B BUTTON LETTERS
+//
+// When a box lands, the button a player is meant to be hitting appears under
+// the hit line: A over the kick lane, B over the snare - the very letters the
+// micro:bit is sent, so what is on screen and what is in their hands agree.
+//
+// Two things spawn together:
+//
+//   the letter   set in Futura, coloured off the title's palette, and then
+//                carried on down the highway toward the camera on the same
+//                projection the boxes travel through. It leaves the frame by
+//                growing and moving, not by fading.
+//
+//   the shaft    a stationary block the width of the lane, hung from the hit
+//                line and running off the bottom of the screen. It does not
+//                move or scale - it simply fades - so it reads as the lane
+//                itself lighting up rather than as another flying object.
+const BUTTON_POP_LETTERS = { kick: "A", snare: "B" };
+
+// The face the letters are set in. Each entry is either
+//
+//   a font FILE      "fonts/KARNIVOD.ttf" - loaded and registered for you, so
+//                    dropping a .ttf into fonts/ and naming it here is the
+//                    whole job. No @font-face to write.
+//
+//   a family NAME    "Futura" - a face the machine already has installed.
+//
+// The first one that is actually available is used, so put the one you want
+// first and leave something behind it to land on. Until a file has finished
+// loading the next entry is used, which is usually invisible - it is a few
+// frames at startup.
+//
+// A LIST, never a CSS stack in one string. p5's textFont() cannot take a
+// stack: handed "Futura, Avenir, sans-serif" it quietly stops applying
+// textSize at all and every letter comes out at the default size however large
+// you asked for. So exactly one name is ever handed to it - see
+// ButtonPops.face() in game.js.
+const BUTTON_POP_FONT = ["fonts/KARNIVOD.ttf", "Futura", "sans-serif"];
+
+// How big the letter is at the hit line, as a fraction of the smaller side of
+// the window - so it holds its proportions on any screen rather than being a
+// fistful of pixels on a projector and half the stage on a laptop.
+//
+// A TYPE SIZE, not a target width. Sizing each letter to a fixed width makes
+// them different sizes, because a B is narrower than an A: fitting both to the
+// same width leaves the B taller, which is exactly the wrong way round. One
+// size for every letter is what makes them match, and their widths then differ
+// the way the face intends.
+const BUTTON_POP_SIZE_FRAC = 0.15;
+
+// How long a letter lasts, in seconds, and how much of that is spent fading.
+//
+// Needed because the letter no longer has to move. When it travels it leaves
+// by going off the edge; standing still, a lifetime is the only thing that
+// ever takes it away - without one they stack up for the whole song.
+const BUTTON_POP_LIFE = 0.4;
+const BUTTON_POP_FADE = 0.55;   // the last fraction of the life, fading out
+
+// How far past the hit line the letter travels before it is gone, in the same
+// `u` the boxes and the starfield tunnel use: 1 is the horizon, 0 the hit
+// line, and negative is nearer than the hit line - out through the camera.
+//
+// It does NOT get a lifetime of its own. It carries on at exactly the rate the
+// notes were coming at, so how long it lasts is this distance over that speed -
+// about half a second at the default lookahead. That is the whole point: the
+// letter does not do something of its own, it keeps going the way everything
+// else on the highway was already going.
+//
+// Scale is 1/(1 + u * PERSPECTIVE_DEPTH), so this must stay well above
+// -1/PERSPECTIVE_DEPTH or the last frame before it wraps is a letter the size
+// of the building. At the defaults -0.12 leaves it about 4.5x, which is
+// already off both the bottom of the screen and the side.
+const BUTTON_POP_U_MIN = -0.12;
+
+// How fast it travels, as a multiple of the speed the notes come at. 1 is
+// exactly the speed of the box it came from, which is the most honest - the
+// letter simply carries on where the box stopped. Below 1 it lingers, which
+// makes it easier to read at the cost of looking like a thing of its own
+// rather than part of the same flow.
+const BUTTON_POP_SPEED = 0.0;
+
+// Clear air between the bar and the top of the letter, at the hit line. It
+// grows with the perspective like everything else.
+const BUTTON_POP_DROP = 10;
+
+// Colour. Every letter is given its own off the title's palette - the same law
+// the embers and the starfield use - so a run of them reads as sparks off the
+// same fire rather than one flat colour repeated.
+//
+// `heat` is titleStop()'s band, and on the flame palette it drives the HUE as
+// well as the brightness: low is deep red, high runs up through orange to
+// near white. So the two lanes are given different bands, and A comes out red
+// where B comes out orange while both stay on the one ramp.
+//
+// They are bands rather than fixed values because titleStop() mixes a shimmer
+// of its own in on top; these bias the result, they do not pin it.
+const BUTTON_POP_HEAT = {
+  kick:  [0.00, 0.30],    // A - the red end
+  snare: [0.55, 1.00]     // B - up into orange
+};
+
+// The shaft under each letter. Its colour is rolled separately from the
+// letter's, so the two are never quite the same, and out of the whole ramp
+// rather than the lane's band - a red letter on an orange shaft, or the other
+// way about.
+const BUTTON_POP_SHAFT_HEAT = [0.15, 0.95];
+const BUTTON_POP_SHAFT_ALPHA = 0.30;   // it is a big block, so it stays quiet
+
+// And its own lifetime, separate from the letter's, so the lane can hold its
+// colour a moment longer than the letter that lit it - or go first.
+const BUTTON_POP_SHAFT_LIFE = 0.2;
+const BUTTON_POP_SHAFT_FADE = 0.75;
+
+// How fast a shaft travels, down the same axis as everything else, as a
+// multiple of the speed the notes come at - so 1 would keep pace with the
+// letter above it.
+//
+// Rolled fresh for every shaft somewhere between these two, which is what
+// stops a run of them moving as one slab: they set off together and then
+// spread out. Either order; the smaller is the slower.
+//
+// Well under 1 on purpose. The letter is the thing being thrown at you; the
+// shaft is the lane it came out of, and a lane that kept up with the letter
+// would be a second projectile rather than a wake.
+const BUTTON_POP_SHAFT_SPEED = [0.0, 0.0];
 
 // Milliseconds added to every micro:bit send, relative to the audible hit.
 // Positive = hardware fires later. Negative = earlier, to cover radio and
@@ -430,6 +595,35 @@ const BOX_W_FRAC = 0.17;      // box width, as a fraction of width
 const BOX_H = 46;
 const LANE_GAP_FRAC = 0.06;
 
+// THE HIGHWAY, over a backdrop
+//
+// The lanes were drawn as a faint coloured wash when there was nothing behind
+// them but a flat background. With a shader moving about back there they need
+// two separate things, and they are separate knobs because they do opposite
+// jobs:
+//
+//   GRID_OPACITY   how strongly the lanes themselves read - the coloured
+//                  fill, the rails down the sides and the rungs across. Turn
+//                  it up to make the highway assert itself.
+//
+//   GRID_DARKNESS  how much of the background colour is laid down INSIDE the
+//                  lanes first, sinking whatever is behind them. Turn it up
+//                  when a busy backdrop is showing through and making the
+//                  notes hard to read. 0 leaves the backdrop untouched.
+//
+// Both are `let`, so they can be dialled from the console or from the sliders
+// in the LOOK panel while a song is actually playing - which is the only way
+// to judge them, since it depends entirely on the backdrop behind.
+let GRID_OPACITY = 4.0;     // 0 invisible · 1 as drawn · up to 3 for emphatic
+let GRID_DARKNESS = 0.62;    // 0 none · 1 solid background colour under the lanes
+
+// The hi-hat diamonds in the middle lane. They are the only thing marking the
+// hat, so they have to be findable against whatever is behind them, and they
+// were sized for a plain background.
+let HIHAT_SIZE = 24;        // at the hit line, in pixels, before perspective
+let HIHAT_ALPHA = 255;      // out of 255
+let HIHAT_GLOW = 2.2;       // halo size, as a multiple of the diamond; 0 for none
+
 // Everything that plays is taken off the flame ramp - the same one the logo,
 // the starfield and the scoreboard's embers run on. Each instrument is a
 // point on it, quoted below as its `heat` in titleStop()'s terms, so a colour
@@ -450,6 +644,156 @@ const LANE_GAP_FRAC = 0.06;
 // colours - "micro:bit connected" in green, "not connected" in red - and
 // making those two the same family of orange as everything else would cost
 // the one distinction on screen that has to be readable at a glance.
+// A video behind everything, dimmed until it is only a suggestion of movement
+// behind the stars.
+//
+// It is a plain DOM <video> under both canvases, not something drawn into
+// them. The browser decodes it on the media engine and composites it on the
+// GPU, so it never touches the frame budget - where pulling frames in with
+// image() would mean a 1280x720 texture upload every frame, on the main
+// thread. That is the whole reason this is a separate layer.
+//
+// There are three of them: the stage select, the score pages, and one per
+// song. The editor never gets one, for the same reason it never gets stars -
+// it is a workshop tool and a moving backdrop behind a grid is just noise.
+
+// Behind the stage select. "" for none.
+const BG_VIDEO_MENU = "shaders/fire.txt";
+//const BG_VIDEO_MENU = "shaders/purpleOcean.txt";
+
+
+// Behind the score pages: the scoreboard at the end of a song, and the
+// highscores list off the menu. "" falls back to whatever the stage select is
+// showing, so leaving it empty changes nothing rather than going blank.
+//
+// Named for a shader because that is what it is for, but it takes a video
+// just as happily - the extension decides, the same as everywhere else.
+const BG_SHADER_HIGHSCORE = "shaders/embers.txt";
+
+// How long a backdrop takes to wash out and back in when it changes, in
+// seconds. 0 cuts straight to the new one.
+//
+// There is one exception, and it is deliberate: starting a song fades the
+// backdrop in over the COUNT-IN instead, however long that happens to be, so
+// the picture arrives with the music rather than to a clock of its own. And
+// finishing one washes the song's backdrop out before the score page's is
+// put up, rather than cutting between two moving pictures.
+const BG_FADE_SECONDS = 0.9;
+// Behind a song that does not name one of its own. "" for none, and such a
+// song plays against the plain background.
+const BG_VIDEO_DEFAULT = "shaders/plasmaRainbowTunnel.txt";
+
+// Where a bare filename is looked for. A song says `"backdrop": "aurora.mp4"`
+// in its song.setup and the file lives here, shared between songs; anything
+// with a "/" in it is used exactly as written instead, so a song folder can
+// hold its own. `"video"`, `"background"` and `"shader"` all mean the same
+// key - see SONG_BACKDROP_KEYS.
+const BG_VIDEO_DIR = "videos/";
+
+// A backdrop can be a shader instead of a video, and the extension decides:
+// .txt, .glsl, .frag or .fs is a fragment shader in GLSL ES 1.00, the WebGL 1
+// dialect. Paste in the "Image" tab of a Shadertoy and it mostly runs.
+//
+// Mostly, because Shadertoy writes the newer GLSL ES 3.00 and a few things
+// have to be translated by hand: tanh(), texture() for texture2D(), and
+// for-loops, which in 1.00 must declare the index in the init and step it by a
+// constant. See the top of shaderbg.js, which has the details and the reason
+// this is not simply run as 3.00.
+//
+// See shaderbg.js for which uniforms are provided: all the plain ones, plus
+// iSpark for the pointer's sparks, and none of the iChannel texture inputs,
+// since there is nothing to plug into them.
+//
+// Bare shader names are looked for here, the way bare video names are looked
+// for in BG_VIDEO_DIR.
+const BG_SHADER_DIR = "shaders/";
+
+// What fraction of the window a shader is rendered at, before the GPU scales
+// it back up. This is the dial that decides what a shader backdrop costs.
+//
+// Unlike a video - decoded on the media engine and composited for free - a
+// shader is real GPU work on every frame, as much as the shader asks for, and
+// a heavy Shadertoy import can cost more than the game does. Sitting behind a
+// heavy wash it is very forgiving of being rendered small: drop this to 0.5
+// for a quarter of the pixels, and further if a clever shader is costing
+// frames.
+//
+// Two of them, because the two screens are not competing for the same budget.
+// The menu has nothing else to draw and can afford a sharp backdrop; a song
+// has a highway of note boxes, the 3D shapes, the starfield tunnel and the
+// micro:bit going at once, and a dropped frame there is a dropped frame in
+// something somebody is playing along to. So the song is rendered smaller.
+//
+// Clamped to 0.1..1 when used, so an over-enthusiastic number here cannot ask
+// for a zero-sized buffer or for more pixels than the window has.
+const BG_SHADER_SCALE = 0.5;        // the stage select and the highscores
+const BG_SONG_SHADER_SCALE = 0.5;   // GAME, PAUSE and END
+
+// SPARKS
+//
+// Moving the pointer over a shader backdrop throws sparks off it. They are
+// left along the path the pointer takes and then carried away by whatever the
+// shader's own flow is - so they drift with the flames rather than floating
+// over them - fading as they go. Clicking throws a handful at once.
+//
+// Any shader can use them. The preamble hands every one of them
+//
+//     uniform vec4 iSpark[N];     // x, y in 0..1 · a random seed · life 1..0
+//
+// and it is up to the shader to decide what a spark looks like and how its own
+// flow should carry one. See the bottom of shaders/fire.txt for an example
+// that puts each spark through the very same domain warp the fire is drawn
+// through, which is what makes them look like part of it.
+
+// How many sparks can be in the air at once. Each one costs every pixel a
+// couple of instructions, which is nothing beside the noise these shaders are
+// built from - but it is the dial if it ever matters.
+const BG_SHADER_SPARKS = 28;
+
+// How long a spark lasts, in seconds, from struck to gone.
+const BG_SHADER_SPARK_LIFE = 2.2;
+
+// How far the pointer travels, as a fraction of the screen, between one spark
+// and the next. Smaller lays a denser trail; a fast drag throws more than a
+// slow one either way, because it covers the ground quicker.
+const BG_SHADER_SPARK_SPACING = 0.035;
+
+// How many go up at once on a click.
+const BG_SHADER_SPARK_BURST = 8;
+
+// How far a burst scatters from the pointer, as a fraction of the screen, so
+// a click reads as a shower rather than a stack of sparks in one spot.
+const BG_SHADER_SPARK_SCATTER = 0.045;
+
+// How a backdrop is graded. Two independent sets, because the two jobs are
+// not the same: the menu has to stay readable under a logo, buttons and a
+// column of song cards, while a song's backdrop is behind a note highway and
+// can afford to be bolder.
+//
+//   dim         how much of the background colour is washed back over it.
+//               0 shows it raw, 1 hides it completely. High, generally:
+//               this is meant to be felt rather than watched.
+//   brightness  a grade on top of the wash, for clips that are too flat or
+//   contrast    too hot as shot. 1 and 1 leave the picture alone, and the
+//               filter is skipped entirely when both are 1, so a backdrop
+//               that needs no grading pays nothing for the feature.
+//
+// Turn on DEBUG and the BACKDROP panel works all three live, with a button
+// that writes the lines to paste back - into the song's song.setup on a
+// playing page, or into this file on the menu.
+
+// The stage select and the highscores.
+const BG_MENU_DIM = 0.0;
+const BG_MENU_BRIGHTNESS = 1;
+const BG_MENU_CONTRAST = 1;
+
+// Songs. A song overrides any of these for itself with `"videoDim"`,
+// `"videoBrightness"` and `"videoContrast"` in its song.setup; what it leaves
+// out it takes from here.
+const BG_SONG_DIM = 0.2;
+const BG_SONG_BRIGHTNESS = 1;
+const BG_SONG_CONTRAST = 1;
+
 const COLORS = {
   bg:        [8, 8, 14],
   hitLine:   [255, 246, 226],   // white-hot, just off white
@@ -580,6 +924,22 @@ const TITLE_GLOW_RADIUS = 5;     // px the glow copies sit out from the letters
 const TITLE_GLOW_COPIES = 6;     // drawn in a ring, so the falloff is even
 const TITLE_GRADIENT_STOPS = 14; // smoothness of the sweep
 
+// How solid a song card sits on its background.
+//
+// The cards used to be nothing but a faint white sheen, which was fine over a
+// flat background and became hard to read the moment there was a shader moving
+// about behind them. So they get a backing of the background colour first, and
+// this is how much of it: 0 is the old bare sheen, 1 is a card you cannot see
+// through at all.
+//
+// `let`, so it can be dialled from the console against whatever backdrop is
+// actually loaded rather than guessed at.
+let CARD_OPACITY = 0.72;
+
+// The sheen on top of that backing, which is what separates one card from the
+// next and picks out the one under the pointer. Out of 255.
+const CARD_SHEEN = [12, 26];    // [resting, hovered]
+
 // Starfield. Density is per pixel of canvas, clamped, so a big window does
 // not end up with thousands of them.
 const STAR_DENSITY = 1 / 9000;
@@ -599,8 +959,35 @@ const STAR_COUNT_RANGE = [60, 220];
 // The size is taken from the star's `layer` at draw time rather than baked in
 // when the field is built, so these can be changed live from the console and
 // the menu and the game never have to agree.
-const STAR_SIZE_MENU = [4.7, 8.5];
+const STAR_SIZE_MENU = [1.7, 2.5];
 const STAR_SIZE_GAME = [6.0, 13.0];
+
+// Which way the menu field drifts, as a compass bearing in degrees:
+//
+//     0 up · 90 right · 180 down · 270 left
+//
+// 180 is the drift it has always had. Anything between works - 200 is a
+// lazy diagonal - and the field wraps in both directions, so nothing runs out
+// whichever way it is pointed.
+//
+// The angle is the one you see: it is corrected for the window's shape before
+// it is used, so 45 is a true 45 degrees on screen rather than only on a
+// square window.
+//
+// Read at draw time, so it can be turned live from the console.
+let STAR_DIRECTION_MENU = 180;
+
+// `let` rather than `const`, like DEBUG and TITLE_PALETTE, so both of these
+// can be changed from the console while the thing is running and seen
+// straight away - which is the only sane way to pick an angle.
+//
+// The menu field, on or off. The game's tunnel is a separate thing and is not
+// affected - it flies off the highway's vanishing point and belongs to the
+// song rather than to the wallpaper.
+//
+// Worth turning off when the backdrop is a busy shader: two sets of drifting
+// sparks fight each other, and the shader usually wins.
+let STAR_ENABLED_MENU = true;
 
 // While a song is playing the field stops drifting down and flies at the
 // camera instead, through the same projection as the falling blocks and off

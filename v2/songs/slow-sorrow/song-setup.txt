@@ -1,0 +1,17 @@
+{
+  "name": "Slow Sorrow",
+  "bpm": 70,
+  "blurb": "Just sad.",
+  "shader": "purpleOceanSong.txt"
+  // The sounds live in sound-settings.txt beside this file.
+}
+ 
+// SHADER LIST
+// plasmaRainbowTunnel.txt
+// fire.txt
+// embers.txt
+// globula.txt
+// starfield.txt
+// 80sSong.txt
+// metaballs.txt
+// rainbowField.txt

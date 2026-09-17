@@ -65,6 +65,13 @@ function hslToRgb(h, s, l) {
 // maths is a modulo for the drift, a sine for the twinkle, and the same
 // colour law the title uses. At the default density that is around 150
 // rects, which is nothing next to the note boxes.
+// Fractional part, always positive: -0.2 comes back as 0.8 rather than -0.2.
+// A star drifting up or left needs this to reappear at the far edge instead of
+// walking off the screen forever.
+function wrapUnit(v) {
+  return ((v % 1) + 1) % 1;
+}
+
 const Starfield = {
   stars: [],
   builtFor: { w: 0, h: 0 },
@@ -138,16 +145,33 @@ const Starfield = {
     // star was born.
     const palette = TITLE_PALETTES[TITLE_PALETTE] || TITLE_PALETTES.rainbow;
 
+    // The drift direction, worked out once per frame rather than per star.
+    //
+    // A compass bearing - 0 up, 90 right, 180 down - turned into a step in
+    // the 0..1 space the stars live in. The x step carries height/width
+    // because a star's position is a fraction of each axis and those axes are
+    // not the same length: without it a 45 degree drift would come out at
+    // whatever angle the window happened to make of it. `speed` stays what it
+    // always was, screen *heights* per second, so at 180 this is exactly the
+    // straight-down drift it replaces.
+    const heading = radians(STAR_DIRECTION_MENU);
+    const driftX = Math.sin(heading) * (height / width);
+    const driftY = -Math.cos(heading);
+
     push();
     noStroke();
     for (const s of this.stars) {
-      const y = ((s.y + seconds * s.speed) % 1) * height;
+      // Wrapped the long way round because a star travelling up or left goes
+      // negative, and a bare % leaves it there - off the screen for good.
+      const travel = seconds * s.speed;
+      const x = wrapUnit(s.x + driftX * travel) * width;
+      const y = wrapUnit(s.y + driftY * travel) * height;
       const twinkle = 0.65 + 0.35 * Math.sin(seconds * s.rate + s.phase);
       const c = titleStop(palette, s.flow, s.layer);
       const [r, g, b] = hslToRgb(c.h, c.s, c.l);
       const size = this.sizeOf(s, STAR_SIZE_MENU);
       fill(r, g, b, s.bright * twinkle);
-      rect(s.x * width, y, size, size);
+      rect(x, y, size, size);
     }
     pop();
   },
@@ -201,6 +225,256 @@ const Starfield = {
 //
 // Everything is in seconds and pixels per second rather than per frame, so it
 // looks the same at 30fps on a tired laptop as it does at 60.
+// The A and B letters that appear under the hit line when a box lands, and the
+// shaft of colour each one leaves in its lane.
+//
+// The letters used to be SVG files. They are type now, which means no loading,
+// no aspect ratio to preserve, and a change of face is a line in config.js.
+const ButtonPops = {
+  pops: [],
+
+  clear() {
+    this.pops.length = 0;
+  },
+
+  // An ember colour off the title's palette, from a band of heat. On the flame
+  // palette the band drives the hue as well as the brightness, which is what
+  // lets the two lanes sit at different ends of the same fire.
+  ink(band) {
+    const palette = TITLE_PALETTES[TITLE_PALETTE] || TITLE_PALETTES.flame;
+    const heat = band[0] + Math.random() * (band[1] - band[0]);
+    const c = titleStop(palette, Math.random(), heat);
+    return hslToRgb(c.h, c.s, c.l);
+  },
+
+  spawn(drum, songTime) {
+    const letter = BUTTON_POP_LETTERS[drum];
+    if (!letter) return;                      // only the lanes that have one
+
+    const band = BUTTON_POP_HEAT[drum] || [0, 1];
+    const [lr, lg, lb] = this.ink(band);
+    const [sr, sg, sb] = this.ink(BUTTON_POP_SHAFT_HEAT);
+
+    // The shaft's own speed down the highway, rolled now and kept, so it does
+    // not change under it from frame to frame. Written either way round in
+    // config, so the ends are sorted out here rather than there.
+    const lo = Math.min(BUTTON_POP_SHAFT_SPEED[0], BUTTON_POP_SHAFT_SPEED[1]);
+    const hi = Math.max(BUTTON_POP_SHAFT_SPEED[0], BUTTON_POP_SHAFT_SPEED[1]);
+    const shaftSpeed = lo + Math.random() * (hi - lo);
+
+    // No x: where either part is depends on how far down the highway it has
+    // got, and that is worked out fresh every frame from the lane and the
+    // projection.
+    this.pops.push({ drum, letter, at: songTime, shaftSpeed, lr, lg, lb, sr, sg, sb });
+  },
+
+  // How much of a thing is left at this age: 1 while it holds, then down to 0
+  // across the last `fadeFrac` of its life. The same shape the count-in
+  // numbers use - full strength for most of it, then out.
+  fadeAt(age, life, fadeFrac) {
+    if (life <= 0) return 0;
+    const holdFor = life * (1 - fadeFrac);
+    if (age <= holdFor) return 1;
+    return Math.max(0, 1 - (age - holdFor) / (life * fadeFrac));
+  },
+
+  // Whether an entry in BUTTON_POP_FONT names a file rather than an installed
+  // family. A path or a font extension means a file.
+  isFontFile(entry) {
+    return /[\\/]/.test(entry) || /\.(ttf|otf|woff2?)$/i.test(entry);
+  },
+
+  // The family name a file is registered under: its own basename, with
+  // anything awkward taken out.
+  //
+  // p5 builds the canvas font string as `${size}px ${family}` with no quotes
+  // around the family, so a name with a space in it would break the whole
+  // string and silently undo the size. Since both ends of this are ours, the
+  // name is simply made safe.
+  familyForFile(path) {
+    const base = path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+    return base.replace(/[^A-Za-z0-9_-]/g, "_");
+  },
+
+  // Register every file in the list with the browser. Called once at startup;
+  // the loads run in the background and face() picks each one up as it lands.
+  loadFonts() {
+    if (!window.FontFace || !document.fonts) return;
+
+    for (const entry of BUTTON_POP_FONT) {
+      if (!this.isFontFile(entry)) continue;
+
+      const family = this.familyForFile(entry);
+      const face = new FontFace(family, `url("${entry}")`);
+      face.load()
+        .then(loaded => document.fonts.add(loaded))
+        .catch(() => {
+          // A missing or unreadable file. Said once, quietly: the list has
+          // something behind it to fall back to, so this is not fatal.
+          loadError = `button font ${entry} would not load`;
+          console.warn(loadError);
+        });
+    }
+  },
+
+  // The first entry on the list that is actually usable right now.
+  //
+  // Deliberately NOT cached. A file takes a moment to arrive, and a cached
+  // answer taken on the first frame would pin the fallback for the whole
+  // session - the font would load and never be used. Re-asking each frame is
+  // a string compare or two and means it swaps itself in the moment it lands.
+  //
+  // One name, never a stack: p5 takes a stack without complaint and then stops
+  // applying textSize, so everything comes out at the default size.
+  face() {
+    const list = BUTTON_POP_FONT;
+
+    for (const entry of list) {
+      const family = this.isFontFile(entry) ? this.familyForFile(entry) : entry;
+      try {
+        if (document.fonts && document.fonts.check(`16px "${family}"`)) return family;
+      } catch (err) { /* an old browser, or a name it will not parse */ }
+    }
+
+    // Nothing on the list is ready. The last entry is the one to sit on
+    // meanwhile, since it is meant to be a generic like sans-serif - and
+    // document.fonts.check() has nothing useful to say about those.
+    const last = list[list.length - 1];
+    return last && !this.isFontFile(last) ? last : "sans-serif";
+  },
+
+  draw(songTime, geo) {
+    if (!this.pops.length) return;
+
+    // Dropped when both parts have outlived their time. Age decides this, not
+    // distance travelled: a pop that is standing still - which is what a speed
+    // of 0 means, and is how these are set up - never gets anywhere, and a cull
+    // that waited for it to leave the screen would wait for the whole song.
+    //
+    // Walked backwards so removing one does not make the loop step over the
+    // next.
+    const oldest = Math.max(BUTTON_POP_LIFE, BUTTON_POP_SHAFT_LIFE);
+    for (let i = this.pops.length - 1; i >= 0; i--) {
+      const age = songTime - this.pops[i].at;
+      // A negative age means the clock went backwards - a restart, or a seek
+      // in the editor - and the pop belongs to a run that is over.
+      if (age > oldest || age < 0) this.pops.splice(i, 1);
+    }
+
+    this.drawShafts(songTime, geo);
+    this.drawLetters(songTime, geo);
+  },
+
+  // A block the width of the lane, hung from the hit line and running off the
+  // bottom of the screen, travelling down the same axis as everything else.
+  //
+  // Its own speed, rolled per shaft and slower than the letter's, so a run of
+  // them fans out instead of moving as one slab - and so the lane reads as a
+  // wake being left behind rather than as a second thing thrown at you.
+  //
+  // Its top follows the projection, its width and its position flare with the
+  // lane, and its bottom stays off the edge of the screen - so it is always a
+  // shaft running out of frame, never a floating rectangle.
+  drawShafts(songTime, geo) {
+    push();
+    noStroke();
+    for (const pop of this.pops) {
+      const age = songTime - pop.at;
+      const u = this.travelledAt(age, pop.shaftSpeed);
+      const q = Visuals.projectU(u, geo);
+      if (q.y > height) continue;                 // top already off the bottom
+
+      // Faded on the clock rather than on the distance travelled, because a
+      // shaft that stands still covers no distance at all and would never
+      // fade.
+      const left = this.fadeAt(age, BUTTON_POP_SHAFT_LIFE, BUTTON_POP_SHAFT_FADE);
+      if (left <= 0) continue;
+
+      const x = Visuals.laneX(pop.drum, q.scale, geo);
+      const w = geo.boxW * q.scale;
+
+      fill(pop.sr, pop.sg, pop.sb, 255 * BUTTON_POP_SHAFT_ALPHA * left);
+      // Down to past the bottom edge, so there is never a seam along the foot
+      // of the screen.
+      rect(x - w / 2, q.y, w, height - q.y + 2);
+    }
+    pop();
+  },
+
+  drawLetters(songTime, geo) {
+    push();
+    noStroke();
+    textFont(this.face());
+    textAlign(CENTER, TOP);
+
+    for (const pop of this.pops) {
+      // The same projection the boxes travel through, carried on past the hit
+      // line. Everything - where it is across the screen, how far down it is,
+      // how big it is - comes out of the one scale, so it cannot drift off the
+      // axis the rest of the highway is on.
+      const q = Visuals.projectU(this.travelled(songTime - pop.at), geo);
+      const x = Visuals.laneX(pop.drum, q.scale, geo);
+
+      // One size for every letter, so an A and a B match. Fitting each to a
+      // fixed WIDTH is what made them differ: a B is the narrower letter, so
+      // stretching it to the same width left it the taller of the two.
+      const size = Math.min(width, height) * BUTTON_POP_SIZE_FRAC * q.scale;
+
+      // Hung from its top edge rather than centred on a point. Centred, it
+      // would reach up over the hit line on the frame it appears and cover the
+      // very box it is reacting to; hung, it only ever unfolds downward.
+      const top = q.y + BUTTON_POP_DROP * q.scale;
+
+      // Past the bottom of the window well before it reaches U_MIN, and a
+      // letter nobody can see is still work. Dropped here rather than in the
+      // cull above, because it is the only place the size is known.
+      if (top > height) continue;
+
+      const left = this.fadeAt(songTime - pop.at, BUTTON_POP_LIFE, BUTTON_POP_FADE);
+      if (left <= 0) continue;
+
+      textSize(size);
+      fill(pop.lr, pop.lg, pop.lb, 255 * left);
+      text(pop.letter, x, top);
+    }
+    pop();
+
+    // p5 keeps the font on the renderer and does not always hand it back with
+    // pop(), so it is put back by hand - the same thing drawCountIn does.
+    textFont(bodyFont());
+    textAlign(LEFT, TOP);
+  },
+
+  // How far down the highway a pop of this age has got.
+  //
+  // At the speed the notes themselves travel - the whole lookahead in
+  // LOOKAHEAD_SECONDS - so a letter carries on at exactly the rate the box it
+  // came from was moving, rather than at some speed of its own that would read
+  // as a separate thing happening.
+  travelled(age) {
+    return this.travelledAt(age, BUTTON_POP_SPEED);
+  },
+
+  // The same law at any speed. 1 is exactly the rate the notes come at.
+  //
+  // Floored short of where the perspective turns itself inside out. Scale is
+  // 1/(1 + u * PERSPECTIVE_DEPTH), so at u = -1/PERSPECTIVE_DEPTH it divides by
+  // zero, and past that everything comes back NEGATIVE - a rectangle of
+  // negative width, hundreds of pixels above the top of the screen. The cull
+  // takes a pop long before it could get there, but a stalled tab hands back
+  // one enormous frame and an age can jump the lot in a single step.
+  travelledAt(age, speed) {
+    const u = -age * speed / LOOKAHEAD_SECONDS;
+    // Held at the near end rather than running on past it. Age decides when a
+    // pop goes now, so a fast one can still be alive after it has travelled as
+    // far as it is meant to, and without this it would carry on growing.
+    // -0.98/PERSPECTIVE_DEPTH is the hard floor: scale is 1/(1 + u * DEPTH), so
+    // one step further divides by zero and everything past it comes back
+    // negative.
+    return Math.max(u, BUTTON_POP_U_MIN, -0.98 / PERSPECTIVE_DEPTH);
+  }
+};
+
 const Embers = {
   parts: [],
   pending: 0,      // embers of this burst not yet thrown
@@ -350,6 +624,7 @@ const Visuals = {
   reset() {
     this.particles.length = 0;
     this.flash = { kick: 0, snare: 0, hihat: 0 };
+    ButtonPops.clear();
     this.shake = 0;
     this.cursors = { drums: 0, pads: 0, basskeys: 0 };
   },
@@ -422,7 +697,7 @@ const Visuals = {
            score.drums[this.cursors.drums].time <= songTime) {
       const note = score.drums[this.cursors.drums];
       this.cursors.drums++;
-      this.land(note, geo);
+      this.land(note, geo, songTime);
     }
 
     for (const p of this.particles) {
@@ -439,8 +714,15 @@ const Visuals = {
     if (this.shake > 0) this.shake *= 0.86;
   },
 
-  land(note, geo) {
+  land(note, geo, songTime) {
     this.flash[note.drum] = 1;
+
+    // Under the bar, on the lane that fired: the letter and the lane say the
+    // same thing, two landing together do not sit on top of each other the way
+    // a pair in the middle of the screen would, and it then travels out along
+    // that lane rather than straight down.
+    ButtonPops.spawn(note.drum, songTime);
+
     if (note.drum === "kick") this.shake = 9 * note.velocity;
     if (note.drum === "snare") this.shake = 5 * note.velocity;
 
@@ -483,6 +765,7 @@ const Visuals = {
     this.drawBoxes(score, songTime, geo);
     this.drawHitLine(geo);
     this.drawParticles();
+    ButtonPops.draw(songTime, geo);
 
     pop();
   },
@@ -520,7 +803,22 @@ const Visuals = {
         if (fade <= 0.01) break;
 
         noStroke();
-        fill(colour[0], colour[1], colour[2], (11 + 30 * glow) * fade);
+
+        // A backing of the background colour first, so a busy backdrop is sunk
+        // rather than left to show through the lane at full strength. Drawn per
+        // slice like everything else here, and faded with distance the same
+        // way, or it would end in a hard edge at the horizon.
+        if (GRID_DARKNESS > 0) {
+          fill(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2], 255 * GRID_DARKNESS * fade);
+          beginShape();
+          vertex(l0.x, l0.y);
+          vertex(r0.x, r0.y);
+          vertex(r1.x, r1.y);
+          vertex(l1.x, l1.y);
+          endShape(CLOSE);
+        }
+
+        fill(colour[0], colour[1], colour[2], (11 + 30 * glow) * fade * GRID_OPACITY);
         beginShape();
         vertex(l0.x, l0.y);
         vertex(r0.x, r0.y);
@@ -528,7 +826,7 @@ const Visuals = {
         vertex(l1.x, l1.y);
         endShape(CLOSE);
 
-        stroke(colour[0], colour[1], colour[2], (60 + 140 * glow) * fade);
+        stroke(colour[0], colour[1], colour[2], (60 + 140 * glow) * fade * GRID_OPACITY);
         strokeWeight(1.5);
         line(l0.x, l0.y, l1.x, l1.y);
         line(r0.x, r0.y, r1.x, r1.y);
@@ -544,7 +842,7 @@ const Visuals = {
       const p = this.projectU(t / LOOKAHEAD_SECONDS, geo);
       const left = this.laneX("kick", p.scale, geo) - (geo.boxW / 2) * p.scale;
       const right = this.laneX("snare", p.scale, geo) + (geo.boxW / 2) * p.scale;
-      fill(255, 255, 255, 26 * this.farFade(p.u) * p.scale);
+      fill(255, 255, 255, 26 * this.farFade(p.u) * p.scale * GRID_OPACITY);
       rect(left, p.y - 1, right - left, Math.max(1, 2.5 * p.scale));
     }
     pop();
@@ -560,13 +858,24 @@ const Visuals = {
       if (n.time > horizon) break;
 
       const p = this.project(n.time, songTime, geo);
-      const size = 11 * p.scale;
+      const size = HIHAT_SIZE * p.scale;
       if (size < 1) continue;
 
-      fill(c[0], c[1], c[2], 170 * this.farFade(p.u));
+      const fade = this.farFade(p.u);
       push();
       translate(this.laneX("hihat", p.scale, geo), p.y);
       rotate(PI / 4);
+
+      // A soft halo under the diamond. It is what makes one read as bright
+      // rather than merely large: the core can only go to full alpha, so the
+      // extra carrying power has to come from spreading light around it.
+      if (HIHAT_GLOW > 1) {
+        const halo = size * HIHAT_GLOW;
+        fill(c[0], c[1], c[2], HIHAT_ALPHA * 0.16 * fade);
+        rect(-halo / 2, -halo / 2, halo, halo);
+      }
+
+      fill(c[0], c[1], c[2], HIHAT_ALPHA * fade);
       rect(-size / 2, -size / 2, size, size);
       pop();
     }

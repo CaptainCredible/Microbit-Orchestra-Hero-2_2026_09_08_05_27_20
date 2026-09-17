@@ -1,0 +1,128 @@
+/*
+
+    Cheap Cloud Flythrough
+    ----------------------
+
+    (Original header preserved; see the original Shadertoy for author notes.)
+
+*/
+
+vec3 hash33(vec3 p){
+    float n = sin(dot(p, vec3(7.0, 157.0, 113.0)));
+    return fract(vec3(2097152.0, 262144.0, 32768.0) * n);
+}
+
+// IQ's value noise, without the texture lookup. The original pn() sampled a
+// 256x256 white-noise texture; this computes the same value noise directly,
+// which is what your wrapper can run since it binds no iChannel textures.
+float hashVal(vec3 p){
+    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+float pn(in vec3 p){
+    vec3 i = floor(p);
+    p -= i;
+    p = p * p * (3.0 - 2.0 * p);
+
+    float n000 = hashVal(i + vec3(0.0, 0.0, 0.0));
+    float n100 = hashVal(i + vec3(1.0, 0.0, 0.0));
+    float n010 = hashVal(i + vec3(0.0, 1.0, 0.0));
+    float n110 = hashVal(i + vec3(1.0, 1.0, 0.0));
+    float n001 = hashVal(i + vec3(0.0, 0.0, 1.0));
+    float n101 = hashVal(i + vec3(1.0, 0.0, 1.0));
+    float n011 = hashVal(i + vec3(0.0, 1.0, 1.0));
+    float n111 = hashVal(i + vec3(1.0, 1.0, 1.0));
+
+    float nx00 = mix(n000, n100, p.x);
+    float nx10 = mix(n010, n110, p.x);
+    float nx01 = mix(n001, n101, p.x);
+    float nx11 = mix(n011, n111, p.x);
+
+    float nxy0 = mix(nx00, nx10, p.y);
+    float nxy1 = mix(nx01, nx11, p.y);
+
+    return mix(nxy0, nxy1, p.z);
+}
+
+float trigNoise3D(in vec3 p){
+    float res = 0.0, sum = 0.0;
+
+    float n = pn(p * 8.0 + iTime * 2.0);
+
+    vec3 t = sin(p.yzx * 3.14159265 + cos(p.zxy * 3.14159265 + 1.57 / 2.0)) * 0.5 + 0.5;
+    p = p * 1.5 + (t - 1.5);
+    res += (dot(t, vec3(0.333)));
+
+    t = sin(p.yzx * 3.14159265 + cos(p.zxy * 3.14159265 + 1.57 / 2.0)) * 0.5 + 0.5;
+    res += (dot(t, vec3(0.333))) * 0.7071;
+
+    return ((res / 1.7071)) * 0.85 + n * 0.15;
+}
+
+float map(vec3 p){
+    return trigNoise3D(p * 0.5);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec3 rd = normalize(vec3(fragCoord - iResolution.xy * 0.5, iResolution.y * 0.75));
+
+    // Forward only.
+    vec3 ro = vec3(0.0, 0.0, iTime * 4.0);
+
+    // Automatic camera rotation, as in the original. The two-axis form
+    // rotates the view slowly over time; not a control, just motion.
+    vec2 a = sin(vec2(1.5707963, 0.0) + iTime * 0.1875);
+    mat2 rM = mat2(a.x, a.y, -a.y, a.x);
+    rd.xy = rd.xy * rM;
+    rd.xz = rd.xz * rM;
+
+    vec3 lp = vec3(0.0, 1.0, 4.0);
+    lp.xy = lp.xy * rM;
+    lp.xz = lp.xz * rM;
+    lp += ro;
+
+    rd = (rd + (hash33(rd.zyx) * 0.006 - 0.003));
+    rd *= (1.0 + fract(sin(dot(vec3(7.0, 157.0, 113.0), rd.zyx)) * 43758.5453) * 0.06 - 0.03);
+
+    float lDe = 0.0, td = 0.0, w = 0.0;
+    float d = 1.0, t = 0.0;
+    const float h = 0.5;
+
+    vec3 col = vec3(0.0), sp;
+
+    vec3 sn = normalize(hash33(rd.yxz) * 0.03 - rd);
+
+    for (int i = 0; i < 64; i++){
+        if ((td > 1.0) || d < 0.001 * t || t > 80.0) break;
+
+        sp = ro + rd * t;
+        d = map(sp);
+
+        lDe = (h - d) * step(d, h);
+        w = (1.0 - td) * lDe;
+
+        td += w * w * 8.0 + 1.0 / 64.0;
+
+        vec3 ld = lp - sp;
+        float lDist = max(length(ld), 0.001);
+        ld /= lDist;
+
+        float atten = 1.0 / (1.0 + lDist * 0.125 + lDist * lDist * 0.05);
+
+        float diff = max(dot(sn, ld), 0.0);
+        float spec = pow(max(dot(reflect(-ld, sn), -rd), 0.0), 4.0);
+
+        col += w * (d * 3.0 - 0.1) * (0.5 + diff + spec * 0.5) * atten;
+
+        t += max(d * 0.5, 0.02);
+    }
+
+    col = max(col, 0.0);
+
+    col = mix(pow(vec3(1.5, 1.0, 1.0) * col, vec3(1.0, 2.0, 8.0)), col,
+              dot(cos(rd * 6.0 + sin(rd.yzx * 6.0)), vec3(0.333)) * 0.35 + 0.65);
+    col = mix(col.zyx, col, dot(cos(rd * 9.0 + sin(rd.yzx * 9.0)), vec3(0.333)) * 0.15 + 0.85);
+
+    fragColor = vec4(sqrt(max(col, 0.0)), 1.0);
+}

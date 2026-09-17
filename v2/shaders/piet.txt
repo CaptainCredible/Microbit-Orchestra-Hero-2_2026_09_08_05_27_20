@@ -1,0 +1,141 @@
+// Ported to GLSL ES 1.00, the dialect this app runs. The original is GLSL ES
+// 3.00 (Shadertoy's), and four things in it do not exist here:
+//
+//   the 256-entry `const float[256]` noise table   first-class arrays
+//   HEX(0xffffff) with >> and &                    bitwise operators
+//   ivec2 & 1, x ^ y in crosshatch()               bitwise operators
+//   i % 3                                          integer modulo
+//   mat2x2                                         spelt mat2
+//
+// Each is replaced below with something the older language has. The one change
+// you can see is the noise: the table is gone and a hash takes its place, so
+// the squares land in different places than the original. It is uniform random
+// either way, so it is the same picture with a different seed.
+
+// Stood in for the pre-generated table. Same job - a spread of values in 0..1
+// that does not repeat over the few hundred indices this asks for.
+float rnd(float n) {
+    return fract(sin(n * 12.9898 + 78.233) * 43758.5453);
+}
+
+// The original read `ivec2 xy = ivec2(xyf) & 1;` then `xy.x ^ xy.y`.
+// mod(floor(v), 2.0) is the same "low bit", and for two values that are each
+// 0 or 1, abs(a - b) is exactly their exclusive or.
+float crosshatch(vec2 xyf) {
+    vec2 xy = mod(floor(xyf), 2.0);
+    float x = abs(xy.x - xy.y);
+    return (x * 2.0 + xy.y) / 4.0;
+}
+
+vec3 colormap(vec3 rgb) {
+    // HEX(0x......) unpacked by hand, since it was doing it with shifts.
+    const vec3 c000 = vec3(1.000000, 1.000000, 1.000000);   // ffffff
+    const vec3 c001 = vec3(0.000000, 0.607843, 0.909804);   // 009be8
+    const vec3 c011 = vec3(0.329412, 0.039216, 0.741176);   // 540abd
+    const vec3 c010 = vec3(0.921569, 0.000000, 0.447059);   // eb0072
+    const vec3 c110 = vec3(0.850980, 0.419608, 0.027451);   // d96b07
+    const vec3 c100 = vec3(1.000000, 0.945098, 0.000000);   // fff100
+    const vec3 c101 = vec3(0.152941, 0.725490, 0.176471);   // 27b92d
+    const vec3 c111 = vec3(0.003922, 0.039216, 0.192157);   // 010a31
+
+    vec3 c00x = mix(c000, c001, rgb.r);
+    vec3 c01x = mix(c010, c011, rgb.r);
+    vec3 c10x = mix(c100, c101, rgb.r);
+    vec3 c11x = mix(c110, c111, rgb.r);
+
+    vec3 c0xx = mix(c00x, c01x, rgb.g);
+    vec3 c1xx = mix(c10x, c11x, rgb.g);
+
+    return mix(c0xx, c1xx, rgb.b);
+}
+
+// How many squares to render. Max 32
+#define COUNT 30
+// The time multiplier. 1x will cause it to loop once every second!
+#define SPEED 1./36.
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    vec2 uv = (2. * fragCoord - iResolution.xy) / length(iResolution.xy);
+    const float rotation = -1. * 3.14159265 / 18.;
+    uv *= mat2(                                 // mat2x2 in the original
+        cos(rotation),  sin(rotation),
+        sin(rotation), -cos(rotation)
+    );
+    vec3 rgb = vec3(0);
+    float t = iTime * SPEED;
+
+    for (int i = 0; i < COUNT; i++) {
+        float fi = float(i);
+
+        // generate random squares. The original indexed the table at
+        // (i * 7 + n) & 255; with COUNT at 30 that never wrapped, so the
+        // hash is simply fed the same running number.
+        float rOffset    = rnd(fi * 7.0);
+        float rSize      = rnd(fi * 7.0 + 1.0);
+        float rXPosition = rnd(fi * 7.0 + 2.0);
+        float rYPosition = rnd(fi * 7.0 + 3.0);
+
+        // generate the properties
+        float size = 0.2 + 1.2 * rSize;
+        float time = fract(t + rOffset);
+        vec2 uvScale = uv * (16. * (1.0 - time)) + vec2(
+            8. * (rXPosition - 0.5),
+            8. * (rYPosition - 0.5)
+        );
+        // antialias width
+        float aa = fwidth(uvScale.x) * .5;
+
+        // generate square bounds
+        float alphaX = smoothstep(
+            -aa, aa,
+            size - abs(uvScale.x)
+        );
+        // y bounds move with time
+        float alphaY = smoothstep(
+            -aa, aa,
+            size - abs(uvScale.y)
+        );
+        // squares fade in/out
+        float alphaTime = smoothstep(0.5, 0.4, abs(0.5 - time)) * 0.5;
+
+        float alpha = alphaX * alphaY * alphaTime;
+
+        // i % 3 picked the channel. No integer modulo here, so mod() on a
+        // float and three step()s that are 1 for exactly one value of it.
+        float m = mod(fi, 3.0);
+        vec3 channel = vec3(
+            step(m, 0.5),
+            step(0.5, m) * step(m, 1.5),
+            step(1.5, m)
+        );
+
+        rgb = mix(rgb, vec3(1.), channel * alpha);
+    }
+    // overexposure
+    rgb = 2. * rgb;
+    rgb = min(rgb, vec3(1.0)) + 2. * max(vec3(0.0), rgb.gbr - 1.) + 2. * max(vec3(0.0), rgb.brg - 1.);
+
+    // crosshatching
+    /*
+    const float steps = 2.;
+    float thres = 1.0 - (
+    crosshatch(fragCoord) +
+    crosshatch(fragCoord / 2.) / 4. +
+    crosshatch(fragCoord / 4.) / 16.+
+    crosshatch(fragCoord / 8.) / 64.);
+    //v = fract(uv.x + 0.5); // crosshatch patterntest
+    rgb = clamp(
+    (floor(steps * rgb) + step(thres, fract(steps * rgb))) / steps
+    , vec3(0.), vec3(1.));
+    */
+    vec3 col = colormap(
+        rgb
+    );
+
+    // masking where the center graphic will be
+    //col = mix(col, vec3(0.501961, 0.000000, 0.188235), step(uv.y*uv.y + uv.x*uv.x, 0.2));
+
+    // Output to screen
+    fragColor = vec4(col, 1.0);
+}

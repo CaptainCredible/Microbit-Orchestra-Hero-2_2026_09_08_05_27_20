@@ -263,16 +263,26 @@ function scoreFromArrayBuffer(buffer, name) {
 // The filenames to try for one part, most likely first.
 //
 // A web server is case-sensitive and a person is not: "Pads.mid", "pads.mid"
-// and "Pads.MID" are all obviously the same part, and getting a silent
-// missing instrument because of a capital letter is a miserable half hour.
-// So the plausible spellings are tried in turn.
+// and "Pads.MID" are all obviously the same part, and getting a silent missing
+// instrument because of a capital letter is a miserable half hour. So a few
+// plausible spellings are tried in turn.
+//
+// A FEW. This used to try twenty - four capitalisations by five extensions -
+// which costs nothing off a local disk and a great deal off a web server: every
+// part a song does NOT have burns the whole list as failed requests, and with
+// four parts and three songs that was several hundred round trips at startup.
+// On a host that redirects its 404s it was also several hundred CORS errors in
+// the console, which buries anything real.
+//
+// The first entry is the canonical name and is the one to use. The rest are a
+// courtesy, not a promise.
 function songFileNames(part) {
   const stem = part.replace(/\.mid$/i, "");
   const lower = stem.toLowerCase();
-  const upper = stem.charAt(0).toUpperCase() + lower.slice(1);
+
   const names = [];
-  for (const s of [stem, upper, lower, stem.toUpperCase()]) {
-    for (const ext of [".mid", ".MID", ".Mid", ".midi", ".MIDI"]) {
+  for (const s of [stem, lower]) {
+    for (const ext of [".mid", ".midi", ".MID"]) {
       const name = s + ext;
       if (!names.includes(name)) names.push(name);
     }
@@ -512,4 +522,130 @@ function addCountIn(score, beats, lead) {
 
   score.countIn = silence + count * perBeat;
   return score;
+}
+
+//////////////////////////////////////////////////////////////////////
+// SONG ZIPS
+//
+// A song folder that has been zipped up, so one can be handed over as a
+// single file and dropped on the menu. The contents are exactly a song
+// folder's - see the SONG FOLDERS block above - and are read the same way
+// once unpacked.
+//////////////////////////////////////////////////////////////////////
+
+// Unpack a .zip, with no library.
+//
+// Only the two methods anything actually writes are supported: stored (0)
+// and deflate (8), and deflate is inflated by the browser's own
+// DecompressionStream rather than by hand.
+//
+// The index read here is the central directory at the end of the file, not
+// the local header in front of each file. They mostly agree, but a local
+// header is allowed to leave the sizes at zero and put them in a descriptor
+// *after* the data - which cannot be read forwards - and a zip written by a
+// streaming tool does exactly that. The central directory always has them.
+//
+// Returns [{ name, bytes }], with the names exactly as stored, so paths and
+// all: what to do about a wrapping folder is the caller's business.
+async function readZip(buffer) {
+  const view = new DataView(buffer);
+  const all = new Uint8Array(buffer);
+
+  // The end-of-directory record is 22 bytes, followed by a comment of up to
+  // 64k, so there is no fixed place to look: it is found by scanning back
+  // from the end for its signature.
+  let eocd = -1;
+  const earliest = Math.max(0, all.length - 22 - 0xffff);
+  for (let i = all.length - 22; i >= earliest; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("not a zip file");
+
+  const count = view.getUint16(eocd + 10, true);
+  let at = view.getUint32(eocd + 16, true);
+
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    if (view.getUint32(at, true) !== 0x02014b50) throw new Error("the zip directory is damaged");
+
+    const method = view.getUint16(at + 10, true);
+    const compressed = view.getUint32(at + 20, true);
+    const nameLen = view.getUint16(at + 28, true);
+    const extraLen = view.getUint16(at + 30, true);
+    const commentLen = view.getUint16(at + 32, true);
+    const localAt = view.getUint32(at + 42, true);
+    const name = new TextDecoder().decode(all.subarray(at + 46, at + 46 + nameLen));
+    at += 46 + nameLen + extraLen + commentLen;
+
+    if (name.endsWith("/")) continue;               // a folder, with no data
+    if (compressed === 0xffffffff || localAt === 0xffffffff) {
+      throw new Error(`${name} is stored in zip64, which is not supported`);
+    }
+
+    // The local header repeats the name and carries an extra field of its
+    // own, which is *not* the same length as the directory's, so where the
+    // data starts has to come from the local header rather than be guessed.
+    if (view.getUint32(localAt, true) !== 0x04034b50) throw new Error(`${name} is damaged`);
+    const from = localAt + 30
+               + view.getUint16(localAt + 26, true)
+               + view.getUint16(localAt + 28, true);
+    const raw = all.subarray(from, from + compressed);
+
+    entries.push({ name, bytes: method === 0 ? raw : await inflateRaw(raw, name, method) });
+  }
+  return entries;
+}
+
+async function inflateRaw(raw, name, method) {
+  if (method !== 8) throw new Error(`${name} uses compression method ${method}, which is not supported`);
+  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// Index a zip's entries by filename alone, lowercased.
+//
+// Dropping the path is what lets a zip made by right-clicking a song folder
+// work as well as one made from its contents: "Slow Sorrow/Keys.mid" and
+// "Keys.mid" are the same part. Lowercasing is the same courtesy
+// songFileNames() extends a folder - a capital letter is not a different
+// file to anyone but a computer.
+function zipIndex(entries) {
+  const index = new Map();
+  for (const entry of entries) {
+    // Compressing a folder on a Mac writes a shadow __MACOSX tree of resource
+    // forks beside the real files, under the same names. Those are not the
+    // files, and a 200-byte one parsed as a .mid is a confusing way to find
+    // that out.
+    if (/(^|\/)__MACOSX\//.test(entry.name)) continue;
+
+    const base = entry.name.split("/").pop();
+    if (!base || base.startsWith(".")) continue;    // .DS_Store and friends
+
+    // First wins, so a file at the top level beats a copy nested deeper.
+    const key = base.toLowerCase();
+    if (!index.has(key)) index.set(key, entry.bytes);
+  }
+  return index;
+}
+
+// The zip's answer to fetchFirstMidi(): try each spelling of a part's name
+// in turn, and hand back the one that was there.
+function firstZipMidi(index, names) {
+  for (const name of names) {
+    const bytes = index.get(name.toLowerCase());
+    if (!bytes || bytes.length < 14) continue;      // too small to be a .mid
+    // A copy, because the bytes may be a view onto the whole zip and the
+    // parser is entitled to the buffer it is handed.
+    return { midi: new Midi(bytes.slice().buffer), name };
+  }
+  return null;
+}
+
+// A text file out of the zip, under any of the spellings given, or null.
+function zipText(index, names) {
+  for (const name of names) {
+    const bytes = index.get(name.toLowerCase());
+    if (bytes) return { text: new TextDecoder().decode(bytes), name };
+  }
+  return null;
 }

@@ -79,11 +79,23 @@ function setup() {
       .catch(() => { bodyFontReady = false; });
   }
   Editor.init();
+  ButtonPops.loadFonts();
   buildUI();
+  watchFullscreen();
   applyPageUI();      // without this every page's controls show at once
   setupDragAndDrop();
   loadStageList();
   Ambient3D.init();
+  Backdrop.build();
+  BackdropPanel.build();
+  // Set here as well as in toggleDebug(), or starting up with DEBUG already on
+  // builds the panel and then never feeds it.
+  Perf.on = DEBUG;
+  PerfPanel.build();
+  // setup() never goes through setPage(), so the opening page has to ask for
+  // its backdrop itself - otherwise the menu sits there with no video until
+  // the first time you navigate away and back.
+  Backdrop.onPage(page);
   SoundPanel.build();
   TimingDrawer.build(ui);
   Scoreboard.init();
@@ -108,6 +120,7 @@ function buildUI() {
   ui.calibrate = createButton("calibrate timing").mousePressed(startCalibration);
   ui.resetScores = createButton("reset player scores").mousePressed(resetPlayerScores);
   ui.editor = createButton("open MIDI editor").mousePressed(() => setPage("EDITOR"));
+  ui.fullscreen = createButton(FULLSCREEN_LABEL[0]).mousePressed(toggleFullscreen);
   ui.highscores = createButton("highscores").mousePressed(() => setPage("HIGHSCORES"));
   ui.hex = createA("https://makecode.microbit.org/_5F62ug11KMCc",
     "get the hex file for your micro:bit", "_blank");
@@ -150,7 +163,22 @@ function buildUI() {
 function layoutUI() {
   const pad = 22;
 
-  ui.editor.position(width - 190, pad);
+  // The top-right pair, laid out from the right edge inwards rather than from
+  // fixed offsets: the fullscreen button's label changes length when it is
+  // pressed, and anything measured from the left would step sideways or run
+  // off the edge when it did.
+  let rx = width - pad;
+  const placeFromRight = (key, fallback) => {
+    // offsetWidth is 0 for exactly one frame, before the browser has ever laid
+    // the element out, so the fallback covers only that frame.
+    const w = ui[key].elt.offsetWidth || fallback;
+    rx -= w;
+    ui[key].position(rx, pad);
+    rx -= 12;
+  };
+  placeFromRight("fullscreen", 104);
+  placeFromRight("editor", 152);
+
   ui.highscores.position(pad, pad);
 
   ui.back.position(pad, pad);
@@ -199,7 +227,8 @@ const BAND = {
 
 // One place that decides which controls exist on which page.
 const PAGE_UI = {
-  STAGE_SELECT: ["connect", "disconnect", "calibrate", "resetScores", "editor", "hex", "highscores"],
+  STAGE_SELECT: ["connect", "disconnect", "calibrate", "resetScores", "editor", "hex",
+                 "highscores", "fullscreen"],
   GAME:         [],
   PAUSE:        ["back", "restart", "resume"],
   // Nothing: at the end of a song "back to songs" and "restart" are in the
@@ -254,10 +283,576 @@ function applyPageUI() {
   }
 }
 
+//////////////////////////////////////////////////////////////////////
+// THE BACKDROP
+//
+// A video under both canvases, washed over with the background colour so it
+// sits behind the stars rather than competing with them.
+//
+// There is one <video> element, not one per song: swapping its src is what
+// changes the backdrop, so only the clip being shown is ever in memory.
+//
+// Built here rather than written into index.html so that the config alone
+// decides whether any of it exists: with no file named anywhere there is no
+// element, no decode, and the game is exactly what it was.
+//
+// It runs only where it can be seen, and only where it belongs:
+//
+//   STAGE_SELECT, HIGHSCORES   BG_VIDEO_MENU - front of house
+//   GAME, PAUSE, END           the song's own, or BG_VIDEO_DEFAULT
+//   EDITOR                     none, for the same reason it has no stars
+//////////////////////////////////////////////////////////////////////
+
+const MENU_BACKDROP_PAGES = ["STAGE_SELECT"];
+const SONG_BACKDROP_PAGES = ["GAME", "PAUSE"];
+const HIGHSCORE_BACKDROP_PAGES = ["END", "HIGHSCORES"];
+
+// Where the 3D layer paints and so where the 2D canvas has to be transparent.
+// Not the same list as SONG_BACKDROP_PAGES any more: END is still a playing
+// page as far as the canvases are concerned, but its backdrop belongs to the
+// score, not to the song that just finished.
+const PLAYING_PAGES = ["GAME", "PAUSE", "END"];
+
+// A backdrop is a video or a shader, and the extension is what says which.
+// A shader is a fragment shader in Shadertoy's dialect - see shaderbg.js.
+function isShaderSource(src) {
+  return /\.(txt|glsl|frag|fs)$/i.test(src || "");
+}
+
+// Where a song's `"video"` points. A bare name lives in BG_VIDEO_DIR, or in
+// BG_SHADER_DIR if it is a shader, shared between songs; anything with a path
+// in it - or a blob: url, which is what a video carried inside a dropped zip
+// becomes - is used exactly as written.
+function backdropSource(name) {
+  if (!name || typeof name !== "string") return "";
+  const trimmed = name.trim();
+  if (!trimmed) return "";
+  if (/[/:]/.test(trimmed)) return trimmed;
+  return (isShaderSource(trimmed) ? BG_SHADER_DIR : BG_VIDEO_DIR) + trimmed;
+}
+
+const Backdrop = {
+  video: null,
+  dim: null,
+  visible: false,
+  src: "",          // what is loaded now, to avoid reloading it
+  shader: false,    // whether `src` is a shader rather than a video
+  look: null,       // dim + grade in force, which the debug panel edits live
+  page: "",         // the page it was last told about, to spot what changed
+  fade: 1,          // 0 washed out completely, 1 the look's own dim
+  fadeTo: 1,        // where `fade` is heading
+  fadeRate: 0,      // how fast, per second
+  pending: null,    // a backdrop waiting for the fade-out to finish
+
+  build() {
+    // Nothing is named anywhere and no song can name one either, so there is
+    // nothing to build. A song naming its own backdrop still needs the wash,
+    // which is why this is not simply "is there a default".
+    if (!BG_VIDEO_MENU && !BG_VIDEO_DEFAULT && !this.anySongHasOne()) return;
+
+    const video = document.createElement("video");
+    video.id = "backdrop";
+    video.loop = true;
+    // Muted in the property as well as the attribute: autoplay is refused
+    // for anything audible, and a backdrop with a soundtrack of its own
+    // would be fighting the song.
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.disablePictureInPicture = true;
+
+    // A flat wash rather than a CSS filter on the video. Same look, and it
+    // does not put a shader pass on every decoded frame.
+    const dim = document.createElement("div");
+    dim.id = "backdrop-dim";
+    dim.style.background = `rgb(${COLORS.bg[0]}, ${COLORS.bg[1]}, ${COLORS.bg[2]})`;
+
+    video.style.display = "none";
+    dim.style.display = "none";
+
+    document.body.append(video, dim);
+    this.video = video;
+    this.dim = dim;
+    // Seeded for whatever page is up, so applyLook() below has something real
+    // to write. onPage() sets it properly a moment later, but build() must not
+    // leave the elements ungraded in between.
+    this.look = this.wants(page).look;
+    this.applyLook();
+  },
+
+  // The stage list is loaded asynchronously and is usually still empty when
+  // build() runs, so this is only ever a "maybe" - but it costs nothing and
+  // it means a config with no house videos at all, whose songs all name their
+  // own, still gets an element once the songs are in.
+  anySongHasOne() {
+    return typeof stageList !== "undefined" && stageList.some(s => s && s.video);
+  },
+
+  // Which clip a page wants, and how it should be graded.
+  //
+  // The menu and a song grade independently - the menu has to stay readable
+  // under a logo and a column of cards, a song's backdrop only has a highway
+  // over it - and on top of that a song can carry settings of its own,
+  // because clips differ wildly and there is no single answer.
+  wants(next) {
+    if (MENU_BACKDROP_PAGES.includes(next)) {
+      return { src: backdropSource(BG_VIDEO_MENU), look: this.menuLook() };
+    }
+    if (HIGHSCORE_BACKDROP_PAGES.includes(next)) {
+      // Falls back to the stage select's, so leaving BG_SHADER_HIGHSCORE empty
+      // keeps what was already there rather than going blank.
+      return {
+        src: backdropSource(BG_SHADER_HIGHSCORE) || backdropSource(BG_VIDEO_MENU),
+        look: this.menuLook()
+      };
+    }
+    if (SONG_BACKDROP_PAGES.includes(next)) {
+      const song = currentSong || {};
+      const look = this.songLook();
+      // Only the ones the song actually names, so leaving a setting out of a
+      // song.setup means "the house default" rather than "zero".
+      if (typeof song.videoDim === "number") look.dim = song.videoDim;
+      if (typeof song.videoBrightness === "number") look.brightness = song.videoBrightness;
+      if (typeof song.videoContrast === "number") look.contrast = song.videoContrast;
+      return { src: backdropSource(song.video) || backdropSource(BG_VIDEO_DEFAULT), look };
+    }
+    return { src: "", look: this.songLook() };   // the editor, and anywhere new
+  },
+
+  menuLook() {
+    return { dim: BG_MENU_DIM, brightness: BG_MENU_BRIGHTNESS, contrast: BG_MENU_CONTRAST };
+  },
+
+  songLook() {
+    return { dim: BG_SONG_DIM, brightness: BG_SONG_BRIGHTNESS, contrast: BG_SONG_CONTRAST };
+  },
+
+  // The wash and the grade, put on the elements. Called on every page change
+  // and on every slider move, so it has to be cheap and it has to be the one
+  // place either of them is written.
+  //
+  // brightness and contrast are a CSS filter on the video, which is a shader
+  // pass over the decoded frame - more than the flat wash costs, still small,
+  // and skipped entirely while both are at 1.
+  applyLook() {
+    if (!this.video) return;
+    const { dim, brightness, contrast } = this.look;
+
+    // `fade` runs 0 to 1 and decides how much of the backdrop's own dim is in
+    // force: at 1 you see the dim that was asked for, at 0 the wash is solid
+    // and the backdrop is gone. Fading this rather than the video's opacity
+    // means one number covers a video, a shader and the plain background
+    // alike, and nothing has to know which is underneath.
+    this.dim.style.opacity = 1 - this.fade * (1 - dim);
+
+    const grade = (brightness === 1 && contrast === 1)
+      ? "none"
+      : `brightness(${brightness}) contrast(${contrast})`;
+    // On both, because only one of them is ever showing and this way neither
+    // can be left wearing the last backdrop's grade.
+    this.video.style.filter = grade;
+    if (ShaderBackdrop.canvas) ShaderBackdrop.canvas.style.filter = grade;
+  },
+
+  // Every page change comes through setPage(), and startSong() sets
+  // currentSong before it, so this is the only place the backdrop has to be
+  // told anything.
+  //
+  // What it decides is WHEN the change happens, not what it is:
+  //
+  //   leaving a song       wash the song's backdrop out first, and only put
+  //                        the score page's up once it has gone. Cutting
+  //                        between two moving pictures reads as a glitch, and
+  //                        the end of a song is the one moment everybody is
+  //                        looking at the screen.
+  //
+  //   starting a song      put it up immediately but invisible, and bring it
+  //                        in over the count-in. No fade-out first: that would
+  //                        eat into the count and the picture would still be
+  //                        arriving when the first note landed.
+  //
+  //   anything else        up immediately, faded in over BG_FADE_SECONDS.
+  onPage(next) {
+    if (!this.video && this.anySongHasOne()) this.build();
+    if (!this.video) return;
+
+    const want = this.wants(next);
+    const wasSong = SONG_BACKDROP_PAGES.includes(this.page);
+    const isSong = SONG_BACKDROP_PAGES.includes(next);
+    const swapping = want.src !== this.src;
+    const from = this.page;
+    this.page = next;
+
+    if (swapping && wasSong && !isSong && this.fade > 0.01 && BG_FADE_SECONDS > 0) {
+      // The outgoing backdrop is left running and simply washed out; install()
+      // happens in update(), once there is nothing left to see.
+      this.pending = { want, page: next };
+      this.startFade(0, BG_FADE_SECONDS);
+      return;
+    }
+
+    this.pending = null;
+
+    // A fade is restarted only when there is something new to reveal. Coming
+    // back from PAUSE is not that: the picture never went away, and fading it
+    // in again would be a flicker at exactly the wrong moment.
+    const starting = next === "GAME" && !SONG_BACKDROP_PAGES.includes(from);
+    if (swapping || starting) this.startFade(1, this.fadeInSeconds(next), 0);
+
+    this.install(want, next);
+  },
+
+  // How long the way in should take. A song gets its count-in, so the backdrop
+  // arrives exactly as the music does; everything else gets the house fade.
+  fadeInSeconds(next) {
+    if (next === "GAME" && score && score.countIn > 0) return score.countIn;
+    return BG_FADE_SECONDS;
+  },
+
+  // `from` is where to start, for a fade that should begin from nothing rather
+  // than from wherever the last one got to.
+  startFade(to, seconds, from) {
+    if (from !== undefined) this.fade = from;
+    this.fadeTo = to;
+    this.fadeRate = seconds > 0 ? 1 / seconds : Infinity;
+    if (!isFinite(this.fadeRate)) this.fade = to;
+  },
+
+  // Called every frame from the draw loop. Nothing else moves the fade, so a
+  // paused or stalled page simply holds where it is.
+  update(dt) {
+    if (!this.video || this.fade === this.fadeTo) return;
+
+    const step = this.fadeRate * Math.min(0.1, Math.max(0, dt));
+    this.fade = this.fadeTo > this.fade
+      ? Math.min(this.fadeTo, this.fade + step)
+      : Math.max(this.fadeTo, this.fade - step);
+
+    this.applyLook();
+
+    // Fully washed out, and something is waiting to take its place.
+    if (this.fade <= 0.0001 && this.pending) {
+      const { want, page: at } = this.pending;
+      this.pending = null;
+      this.startFade(1, this.fadeInSeconds(at), 0);
+      this.install(want, at);
+    }
+  },
+
+  // Put a backdrop up: point the video or the shader at it, show the right
+  // one, and set it running or holding still.
+  //
+  // It is held still on PAUSE for the same reason the starfield is - a paused
+  // game should look paused, not like a screensaver with the boxes stopped on
+  // top of it.
+  install(want, next) {
+    const { src, look } = want;
+    this.look = look;
+
+    this.visible = !!src;
+    this.shader = isShaderSource(src);
+    const moving = this.visible && next !== "PAUSE";
+
+    if (src !== this.src) {
+      this.src = src;
+      // Handing either one a new source throws away the frame it was holding,
+      // so showing() reports false until the new backdrop has something of its
+      // own to show. That is what keeps a swap from flashing the last song's
+      // backdrop under the new one.
+      if (this.shader) {
+        this.video.pause();
+        this.video.removeAttribute("src");
+        // Fetching and compiling takes a moment. Nothing waits for it: the
+        // layers keep painting their own background until ready() turns true,
+        // and if it never does they simply go on doing so.
+        ShaderBackdrop.use(src).then(ok => {
+          // Only now is there anything on the canvas worth showing. Until
+          // this lands - and for good, if it never compiles - it stays hidden
+          // and the layers above go on painting their own background.
+          ShaderBackdrop.show(ok && this.visible && this.shader);
+          if (ok && moving) ShaderBackdrop.start();
+        });
+      } else {
+        ShaderBackdrop.stop();
+        if (src) this.video.src = src;
+        else this.video.removeAttribute("src");
+      }
+    }
+
+    // The menu and a song render a shader at different sizes, so the canvas has
+    // to be resized on the way in and out of a song - not only when the window
+    // changes. A no-op when the size already matches, which is every page
+    // change that stays on the same side of that line.
+    ShaderBackdrop.resize();
+
+    this.applyLook();
+    BackdropPanel.refresh();
+
+    this.video.style.display = (this.visible && !this.shader) ? "block" : "none";
+    ShaderBackdrop.show(this.visible && this.shader && !!ShaderBackdrop.program);
+    this.dim.style.display = this.visible ? "block" : "none";
+
+    if (this.shader) {
+      // Stopped rather than reset: the last frame stays on the canvas, which
+      // is what a paused game should look like.
+      if (moving) ShaderBackdrop.start();
+      else ShaderBackdrop.stop();
+    } else if (moving) {
+      // play() hands back a promise that rejects if the browser is not
+      // convinced this is allowed. By the time a song is running it always
+      // is - it took a click to get here - and a backdrop that did not start
+      // is not worth interrupting the game over.
+      this.video.play().catch(() => {});
+    } else {
+      this.video.pause();
+    }
+  },
+
+  // Whether the canvases have to leave themselves transparent for this.
+  //
+  // False with nothing configured, and false while a backdrop is still
+  // loading - or failed to, which is how a missing file and a shader that
+  // will not compile both end up harmless. Every one of those falls back to
+  // the layers painting their own background exactly as they always did.
+  showing() {
+    if (!this.visible) return false;
+    if (this.shader) return ShaderBackdrop.ready();
+    return !!this.video && this.video.readyState > 0;
+  }
+};
+
+// The backdrop's own debug panel: dim, brightness and contrast, live.
+//
+// Separate from the sound panel rather than a group inside it, because that
+// panel's "export settings" writes sound-settings.txt and these are not
+// sounds - they belong to the song, in its song.setup. So this has its own
+// little export that writes the lines to paste there.
+//
+// It borrows the sound panel's CSS wholesale (the .sp-* classes), because it
+// is the same kind of object and there is no reason for it to look different.
+// The panel's rows. `group` starts a section; everything else is a slider,
+// which reads its value through get() and writes it through set() rather than
+// naming a property - because the two halves of this panel keep their values
+// in quite different places. The backdrop's live on Backdrop.look, which is
+// rebuilt on every page change; the highway's are plain globals from config.js.
+// The right-hand column the debug panels stack in.
+//
+// They used to be placed individually with fixed offsets from the top, which
+// only held while none of them changed height - and the moment LOOK grew a
+// second group it sat on top of PERFORMANCE. A flex column costs nothing and
+// cannot drift out of date.
+function debugColumn() {
+  let column = document.getElementById("debugcolumn");
+  if (!column) {
+    column = document.createElement("div");
+    column.id = "debugcolumn";
+    document.body.appendChild(column);
+  }
+  return column;
+}
+
+const LOOK_PARAMS = [
+  { group: "backdrop" },
+  { label: "dim",        min: 0,   max: 1, step: 0.01,
+    get: () => Backdrop.look.dim,
+    set: v => { Backdrop.look.dim = v; Backdrop.applyLook(); } },
+  { label: "brightness", min: 0.1, max: 3, step: 0.01,
+    get: () => Backdrop.look.brightness,
+    set: v => { Backdrop.look.brightness = v; Backdrop.applyLook(); } },
+  { label: "contrast",   min: 0.1, max: 3, step: 0.01,
+    get: () => Backdrop.look.contrast,
+    set: v => { Backdrop.look.contrast = v; Backdrop.applyLook(); } },
+
+  { group: "highway" },
+  // Up to 4 because that is where config.js has been taken by hand, and a
+  // slider that cannot reach the value it is showing is worse than no slider.
+  { label: "grid opacity",  min: 0, max: 4, step: 0.01,
+    get: () => GRID_OPACITY,  set: v => { GRID_OPACITY = v; } },
+  { label: "grid darkness", min: 0, max: 1, step: 0.01,
+    get: () => GRID_DARKNESS, set: v => { GRID_DARKNESS = v; } },
+  { label: "hihat size",    min: 4, max: 40, step: 0.5,
+    get: () => HIHAT_SIZE,    set: v => { HIHAT_SIZE = v; } },
+  { label: "hihat alpha",   min: 0, max: 255, step: 1,
+    get: () => HIHAT_ALPHA,   set: v => { HIHAT_ALPHA = v; } },
+  { label: "hihat glow",    min: 0, max: 5, step: 0.05,
+    get: () => HIHAT_GLOW,    set: v => { HIHAT_GLOW = v; } }
+];
+
+const BackdropPanel = {
+  root: null,
+  rows: [],
+  out: null,
+  copyBtn: null,
+
+  build() {
+    // No backdrop, nothing to grade. Behind DEBUG rather than DEBUG_SOUND:
+    // this is picture, not sound, and the two switches are independent.
+    if (this.root || !DEBUG || !Backdrop.video) return;
+
+    const root = document.createElement("div");
+    root.id = "backdroppanel";
+
+    const head = document.createElement("header");
+    const title = document.createElement("span");
+    title.textContent = "LOOK";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "copy";
+    copyBtn.onclick = () => this.exportSetup();
+    this.copyBtn = copyBtn;
+
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "reset";
+    resetBtn.onclick = () => {
+      // Back to the defaults for the page you are on, not to one shared set:
+      // resetting the menu should not hand it a song's grade.
+      Backdrop.look = SONG_BACKDROP_PAGES.includes(page)
+        ? Backdrop.songLook() : Backdrop.menuLook();
+      Backdrop.applyLook();
+      // The highway has no per-page variant, so it goes back to one set.
+      GRID_OPACITY = 1.0;
+      GRID_DARKNESS = 0.0;
+      HIHAT_SIZE = 16;
+      HIHAT_ALPHA = 235;
+      HIHAT_GLOW = 2.2;
+      this.refresh();
+    };
+
+    const hideBtn = document.createElement("button");
+    hideBtn.textContent = "hide";
+    hideBtn.onclick = () => this.toggle();
+
+    head.append(title, copyBtn, resetBtn, hideBtn);
+
+    const body = document.createElement("div");
+    body.className = "sp-body";
+    for (const param of LOOK_PARAMS) {
+      if (param.group) {
+        const head = document.createElement("div");
+        head.className = "sp-group";
+        const label = document.createElement("span");
+        label.textContent = param.group;
+        head.appendChild(label);
+        body.appendChild(head);
+        continue;
+      }
+      body.appendChild(this._buildRow(param));
+    }
+
+    const out = document.createElement("textarea");
+    out.className = "sp-out";
+    out.readOnly = true;
+    out.hidden = true;
+
+    root.append(head, body, out);
+    debugColumn().appendChild(root);
+    this.root = root;
+    this.out = out;
+    this.refresh();
+  },
+
+  _buildRow(param) {
+    const row = document.createElement("label");
+    row.className = "sp-row";
+
+    const name = document.createElement("span");
+    name.className = "sp-name";
+    name.textContent = param.label;
+
+    const readout = document.createElement("span");
+    readout.className = "sp-val";
+
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = param.min;
+    input.max = param.max;
+    input.step = param.step;
+
+    // Whole numbers for the ones that are counts of something - an alpha of
+    // "235.00" is just noise to read past.
+    const places = param.step >= 1 ? 0 : 2;
+    const show = () => { readout.textContent = param.get().toFixed(places); };
+
+    input.oninput = () => {
+      param.set(parseFloat(input.value));
+      show();
+    };
+
+    row.append(name, input, readout);
+    this.rows.push({ param, input, show });
+    return row;
+  },
+
+  // Put the controls back in step with what is actually showing. Needed on
+  // every page change, because each song brings its own settings with it and
+  // sliders left where the last song put them would be lying.
+  refresh() {
+    if (!this.root || !Backdrop.look) return;
+    for (const { param, input, show } of this.rows) {
+      input.value = param.get();
+      show();
+    }
+    // The copy button writes into a different file depending on where you
+    // are, so it says which.
+    const song = SONG_BACKDROP_PAGES.includes(page);
+    this.copyBtn.title = song
+      ? "copy these as song.setup lines"
+      : "copy these as config.js lines";
+  },
+
+  toggle() {
+    if (!this.root) return;
+    this.root.classList.toggle("sp-hidden");
+  },
+
+  // The lines to paste back where these settings actually live: a song's go
+  // into its song.setup, the menu's into config.js. A song's are written with
+  // the clip they are grading named alongside them, since settings are worth
+  // nothing attached to the wrong one.
+  exportSetup() {
+    const { dim, brightness, contrast } = Backdrop.look;
+    const n = v => +v.toFixed(2);
+
+    if (SONG_BACKDROP_PAGES.includes(page)) {
+      const named = ((currentSong || {}).video || "").trim();
+      this.out.value =
+        (named ? `"video": ${JSON.stringify(named)},\n` : "") +
+        `"videoDim": ${n(dim)},\n` +
+        `"videoBrightness": ${n(brightness)},\n` +
+        `"videoContrast": ${n(contrast)}`;
+    } else {
+      this.out.value =
+        `const BG_MENU_DIM = ${n(dim)};\n` +
+        `const BG_MENU_BRIGHTNESS = ${n(brightness)};\n` +
+        `const BG_MENU_CONTRAST = ${n(contrast)};`;
+    }
+
+    // The highway settings are globals in config.js wherever you tuned them,
+    // so they are always appended and always labelled - the backdrop half
+    // above goes somewhere else entirely and the two must not be pasted into
+    // the same place by mistake.
+    this.out.value +=
+      `\n\n// config.js\n` +
+      `let GRID_OPACITY = ${n(GRID_OPACITY)};\n` +
+      `let GRID_DARKNESS = ${n(GRID_DARKNESS)};\n` +
+      `let HIHAT_SIZE = ${n(HIHAT_SIZE)};\n` +
+      `let HIHAT_ALPHA = ${Math.round(HIHAT_ALPHA)};\n` +
+      `let HIHAT_GLOW = ${n(HIHAT_GLOW)};`;
+    this.out.hidden = false;
+    this.out.select();
+    // Copying can be refused - an unfocused window, a browser that wants a
+    // fresher gesture - and the textarea is right there and selected either
+    // way, so a refusal is not worth saying anything about.
+    try { navigator.clipboard.writeText(this.out.value); } catch (err) { /* it is on screen */ }
+  }
+};
+
 function setPage(next) {
   page = next;
   if (next !== "STAGE_SELECT") { hoveredCard = -1; hoveredInfo = -1; }
   applyPageUI();
+  Backdrop.onPage(next);
 
   // The scoreboard is DOM rather than a p5 element, so applyPageUI() - which
   // only walks `ui` - does not reach it.
@@ -378,6 +973,13 @@ async function loadSongFolder(id) {
                 `sounds come from sound-settings.txt now, and it is being ignored`;
   }
 
+  const strays = unknownSetupKeys(setup);
+  if (strays.length) {
+    loadError = `songs/${id}/song.setup: nothing reads ${strays.map(k => `"${k}"`).join(", ")}` +
+                ` - check the spelling`;
+    console.warn(loadError, "· known keys:", SONG_SETUP_KEYS.join(", "));
+  }
+
   return {
     id,
     name: setup.name || id,
@@ -385,8 +987,50 @@ async function loadSongFolder(id) {
     bpm: score.bpm,
     sounds,
     score,
+    ...backdropFields(setup),
     source: `songs/${id}/ · ${found.join(" ")}` + (sounds ? " · sounds" : "")
   };
+}
+
+// The backdrop fields a song.setup may carry, copied onto the song.
+//
+// Split out so a folder and a dropped zip agree by construction rather than
+// by both remembering to do it. `video` is resolved later, by backdropSource(),
+// so what is written here is exactly what the file said.
+function backdropFields(setup, videoOverride) {
+  return {
+    video: videoOverride || firstSetupString(setup, SONG_BACKDROP_KEYS),
+    videoDim: firstSetupNumber(setup, SONG_BACKDROP_DIM_KEYS),
+    videoBrightness: firstSetupNumber(setup, SONG_BACKDROP_BRIGHTNESS_KEYS),
+    videoContrast: firstSetupNumber(setup, SONG_BACKDROP_CONTRAST_KEYS)
+  };
+}
+
+// The first of several spellings a setup actually used. Blank strings are
+// skipped, so `"video": ""` does not shadow a `"backdrop"` further down.
+function firstSetupString(setup, names) {
+  for (const name of names) {
+    const value = setup[name];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function firstSetupNumber(setup, names) {
+  for (const name of names) {
+    if (typeof setup[name] === "number") return setup[name];
+  }
+  return undefined;
+}
+
+// Anything in a song.setup that nothing reads.
+//
+// This is the one check that catches the mistake you cannot see: a key that is
+// spelt wrong, or right for a previous version, does exactly nothing and says
+// exactly nothing, and the song plays on looking as though the line were never
+// there. Naming them costs a loop over half a dozen keys, once, at load.
+function unknownSetupKeys(setup) {
+  return Object.keys(setup || {}).filter(key => !SONG_SETUP_KEYS.includes(key));
 }
 
 // The song's sounds: whatever the sound panel exported, pasted into the
@@ -417,19 +1061,39 @@ async function loadSongSounds(id) {
 // and is reported rather than swallowed: a typo in the JSON that silently
 // reverted the whole song to defaults would be very hard to spot.
 async function loadSongSetup(id) {
+  // Every accepted spelling, not just the canonical one. SONG_SETUP_FILES has
+  // always listed these and the zip reader has always honoured them; the
+  // folder reader used to ask for "song.setup" and nothing else, so a folder
+  // whose setup was named any of the others was read as having none at all -
+  // no name, no tempo, no backdrop, and not a word said about it.
   let text = null;
-  try {
-    const response = await fetch(`songs/${id}/song.setup`);
-    if (!response.ok) throw new Error("not found");
-    text = await response.text();
-  } catch (err) {
+  let found = null;
+
+  for (const name of SONG_SETUP_FILES) {
+    try {
+      const response = await fetch(`songs/${id}/${name}`);
+      if (!response.ok) continue;
+      text = await response.text();
+      found = name;
+      break;
+    } catch (err) { /* try the next spelling */ }
+  }
+
+  if (found === null) {
+    // Not an error: a folder with no setup still plays, it just has no name of
+    // its own. Worth a line all the same, because the other reason to see this
+    // is a setup that is there under a name nothing looks for.
+    console.info(`songs/${id}: no song.setup - tried ${SONG_SETUP_FILES.join(", ")}`);
     return {};
+  }
+  if (found !== SONG_SETUP_FILES[0]) {
+    console.info(`songs/${id}: read its setup from ${found}`);
   }
 
   try {
     return parseSetup(text);
   } catch (err) {
-    loadError = `songs/${id}/song.setup is not valid: ${err.message}`;
+    loadError = `songs/${id}/${found} is not valid: ${err.message}`;
     return {};
   }
 }
@@ -490,6 +1154,121 @@ function addDroppedScore(score, filename) {
            `${score.counts.kick} kick, ${score.counts.snare} snare, ${score.counts.hihat} hat`,
     bpm: null, score, source: filename, dropped: true
   });
+}
+
+// A whole song folder in one file.
+//
+// A zip holding the same Drums/Pads/Bass/Keys parts a folder holds, plus an
+// optional song.setup and sound-settings.txt, dropped on the menu. It goes
+// through the same parser, the same scoreFromParts() and the same sound
+// settings reader as a folder does, so a zipped song and the folder it came
+// from are the same song - the only difference is where the bytes came from.
+async function addDroppedZip(file) {
+  const index = zipIndex(await readZip(await file.arrayBuffer()));
+
+  const setup = zippedSetup(index, file.name);
+  const parts = {};
+  const found = [];
+
+  for (const part of SONG_PARTS) {
+    // The name it was actually found under, not the one that was looked for,
+    // so a card built from PADS.MID says so.
+    const hit = firstZipMidi(index, songFileNames(part.file));
+    parts[part.voice] = hit ? hit.midi : null;
+    if (hit) found.push(hit.name);
+  }
+
+  if (!found.length) {
+    throw new Error("no Drums.mid, Pads.mid, Bass.mid or Keys.mid inside");
+  }
+
+  const score = scoreFromParts(parts, setup);
+
+  // Re-timing a part to the setup's bpm is the ordinary case - it is what
+  // every Ableton export needs - so it is a note in the console. Two tempos
+  // that disagree and both look deliberate go on screen, because whichever is
+  // wrong, nobody finds out by listening until it is too late.
+  for (const line of score.retimed) console.info(`${file.name}: re-timed ${line}`);
+  for (const warning of score.warnings) console.warn(`${file.name}: ${warning}`);
+
+  const sounds = zippedSounds(index, file.name);
+
+  // A video carried inside the zip wins over anything the setup names: a zip
+  // is meant to be self-contained, and a name that only resolves on the
+  // machine it was packed on is exactly what zipping it up was avoiding.
+  const video = zippedVideo(index);
+
+  const missing = SONG_PARTS
+    .filter(part => !score.parts[part.voice])
+    .map(part => part.file.replace(/\.mid$/i, "").toLowerCase());
+
+  stageList.push({
+    id: "dropped-" + stageList.length,
+    name: setup.name || file.name.replace(/\.zip$/i, ""),
+    blurb: setup.blurb ||
+           `dropped in · ${found.length} part${found.length === 1 ? "" : "s"}` +
+           (missing.length ? ` · no ${missing.join(", ")}` : ""),
+    bpm: score.bpm,
+    sounds,
+    score,
+    ...backdropFields(setup, video),
+    source: `${file.name} · ${found.join(" ")}` + (sounds ? " · sounds" : "") +
+            (video ? " · video" : ""),
+    dropped: true
+  });
+
+  // The warning is worth saying, but only after the song is on the menu -
+  // it played, it just may not have played at the speed it meant to.
+  if (score.warnings.length) {
+    loadError = `${file.name}: ${score.warnings[0]}` +
+                (score.warnings.length > 1 ? ` (+${score.warnings.length - 1} more)` : "");
+  } else {
+    loadError = "";
+  }
+}
+
+// The setup out of a zip. Absent is normal - a zip of nothing but parts is a
+// song, it simply has no name or tempo of its own. Broken is reported, since
+// a typo in the JSON that silently reverted the whole song to defaults would
+// be very hard to spot.
+function zippedSetup(index, zipName) {
+  const hit = zipText(index, SONG_SETUP_FILES);
+  if (!hit) return {};
+  try {
+    return parseSetup(hit.text);
+  } catch (err) {
+    loadError = `${zipName}: ${hit.name} is not valid: ${err.message}`;
+    return {};
+  }
+}
+
+// A backdrop video out of a zip, as a blob: url the <video> can play
+// straight from memory. Absent is normal.
+//
+// The url is never revoked: it is held for as long as the dropped song is on
+// the menu, which is the rest of the session, and revoking it would break
+// the card that is still pointing at it.
+function zippedVideo(index) {
+  for (const [name, bytes] of index) {
+    if (!/\.(mp4|m4v|webm|ogv)$/i.test(name)) continue;
+    const type = /\.webm$/i.test(name) ? "video/webm"
+               : /\.ogv$/i.test(name) ? "video/ogg" : "video/mp4";
+    return URL.createObjectURL(new Blob([bytes], { type }));
+  }
+  return "";
+}
+
+// The sounds out of a zip: whatever the sound panel's "export settings"
+// produced, zipped up unchanged. Absent means the defaults.
+function zippedSounds(index, zipName) {
+  const hit = zipText(index, SOUND_SETTINGS_FILES);
+  if (!hit) return null;
+  try {
+    return parseSoundSettings(hit.text);
+  } catch (err) {
+    loadError = `${zipName}: ${hit.name} is not valid: ${err.message}`;
+    return null;
+  }
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -574,8 +1353,20 @@ function setupDragAndDrop() {
     if (page !== "STAGE_SELECT" || !DEBUG) return;
 
     for (const file of e.dataTransfer.files) {
+      // A zip is a whole song folder - every part, plus its setup and its
+      // sounds - so it makes one card on its own rather than one per part.
+      if (/\.zip$/i.test(file.name)) {
+        try {
+          await addDroppedZip(file);
+        } catch (err) {
+          loadError = `could not read ${file.name}: ${err.message}`;
+        }
+        continue;
+      }
+      // A bare .mid still works, and still goes the old way: one file, one
+      // card, with the voices worked out from its channels.
       if (!/\.midi?$/i.test(file.name)) {
-        loadError = `${file.name} is not a .mid file`;
+        loadError = `${file.name} is not a .zip or a .mid file`;
         continue;
       }
       try {
@@ -960,7 +1751,22 @@ function updateMicrobit(songTime) {
 
 let soundPanelApplied = false;
 
+// The real draw loop is drawFrame(); this is the wrapper that bills it.
+//
+// Split rather than instrumented inline so there is exactly one timer around
+// the whole of the 2D canvas, whatever the page does inside it.
 function draw() {
+  Perf.frameMark();
+  Perf.time("2d canvas", drawFrame);
+  PerfPanel.refresh();
+}
+
+function drawFrame() {
+  // deltaTime is p5's, in milliseconds. The backdrop's fades are the only
+  // thing in the app running on wall time rather than on the song clock, and
+  // this is the one place they are advanced.
+  Backdrop.update(deltaTime / 1000);
+
   // Set every frame, not once in setup(). The face arrives over the network
   // some frames after setup() runs, so a single call there pins the canvas to
   // the fallback for the life of the page - and the menu, which never touches
@@ -977,8 +1783,10 @@ function draw() {
   TimingDrawer.refresh();
 
   // On the playing pages the 3D layer behind paints the backdrop, so this
-  // canvas has to be transparent. Everywhere else it paints its own.
-  if (page === "GAME" || page === "PAUSE" || page === "END") clear();
+  // canvas has to be transparent - and with a backdrop video running it has
+  // to be transparent on the menu too, or the video is walled off behind it.
+  // Everywhere else it paints its own.
+  if (PLAYING_PAGES.includes(page) || Backdrop.showing()) clear();
   else background(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2]);
 
   // Stars sit behind everything. Skipped in the editor, where they would
@@ -990,7 +1798,7 @@ function draw() {
   // song is paused.
   if (page === "GAME" || page === "PAUSE" || page === "END") {
     Starfield.draw(songTimeNow, Visuals.layout());
-  } else if (page !== "EDITOR") {
+  } else if (page !== "EDITOR" && STAR_ENABLED_MENU) {
     Starfield.draw(millis() / 1000);
   }
 
@@ -1019,7 +1827,7 @@ function drawPerformance() {
   songTimeNow = songTime;
 
   if (page === "GAME") {
-    updateMicrobit(Tone.getTransport().seconds);
+    Perf.time("micro:bit", () => updateMicrobit(Tone.getTransport().seconds));
     Visuals.update(score, songTime);
     if (Tone.getTransport().seconds > score.duration + 2) {
       Tone.getTransport().stop();
@@ -1387,10 +2195,12 @@ function drawDropZone(L) {
   textAlign(CENTER, CENTER);
   fill(dropHighlight ? COLORS.text : COLORS.dim);
   textSize(14);
-  text("drop a midi file here", width / 2, L.dropY + L.dropH / 2 - 10);
+  text("drop song zip here", width / 2, L.dropY + L.dropH / 2 - 14);
   textSize(11);
-  text("channel 10 = drums · channel 1 = pads · channel 2 = bass and keys",
-    width / 2, L.dropY + L.dropH / 2 + 14);
+  text("should contain Keys.mid, Pads.mid, Bass.mid and Drums.mid.",
+    width / 2, L.dropY + L.dropH / 2 + 8);
+  text("Optionally songSetup.txt and sound-settings.txt",
+    width / 2, L.dropY + L.dropH / 2 + 24);
 }
 
 // The menu's own buttons follow the centred column, and the column moves as
@@ -1740,7 +2550,12 @@ function drawStageSelect() {
     const { x, y } = cardRect(i);
     const hovering = hoveredCard === i;
 
-    fill(255, 255, 255, hovering ? 26 : 12);
+    // Two passes: a backing of the background colour so the text has something
+    // solid to sit on whatever is moving behind it, then the old white sheen
+    // on top to separate the cards and pick out the hovered one.
+    fill(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2], 255 * CARD_OPACITY);
+    rect(x, y, L.cardW, L.cardH, 8);
+    fill(255, 255, 255, hovering ? CARD_SHEEN[1] : CARD_SHEEN[0]);
     rect(x, y, L.cardW, L.cardH, 8);
 
     const c = song.score.counts;
@@ -1849,7 +2664,19 @@ function typingInAField() {
   return TEXT_ENTRY_TYPES.includes((active.type || "text").toLowerCase());
 }
 
-function keyPressed() {
+function keyPressed(event) {
+  // The two developer switches. On a chord because they have to be safe to
+  // leave armed during a show, and checked before the typing guard so they
+  // still work with a name field focused - the whole point of them is to get
+  // at the tools from wherever you happen to be.
+  //
+  // event.code rather than `key`, because with shift held `key` is "D", and
+  // because the physical key is what was pressed whatever the layout says.
+  if (event && event.shiftKey && (event.metaKey || event.ctrlKey)) {
+    if (event.code === "KeyD") { toggleDebug(); return false; }
+    if (event.code === "KeyS") { toggleSoundDebug(); return false; }
+  }
+
   if (typingInAField() && keyCode !== ESCAPE) return;
 
   if (key === " " && (page === "GAME" || page === "PAUSE")) {
@@ -1870,6 +2697,21 @@ function keyPressed() {
     SoundPanel.toggle();
     return;
   }
+  // The same gesture the sound panel has, for the picture instead: collapse
+  // it to its header bar without losing where the sliders are.
+  if (key === "b" && DEBUG && BackdropPanel.root) {
+    BackdropPanel.toggle();
+    return;
+  }
+  if (key === "p" && DEBUG && PerfPanel.root) {
+    PerfPanel.toggle();
+    return;
+  }
+  // Anywhere, including the playing pages, which carry no buttons at all.
+  if (key === "f") {
+    toggleFullscreen();
+    return false;
+  }
   if (keyCode === ESCAPE) {
     if (page === "EDITOR") { stopEditorPlayback(); setPage("STAGE_SELECT"); }
     else if (page === "HIGHSCORES") setPage("STAGE_SELECT");
@@ -1877,11 +2719,111 @@ function keyPressed() {
   }
 }
 
+// The developer furniture: the drop zone, the editor button, the vanishing
+// point markers. Kept separate from the sound panel's switch on purpose -
+// tuning the sound on the night should not put a drop target back on the
+// menu.
+//
+// No announcement, because turning it on *is* the announcement: the drop zone
+// and the editor button appear.
+function toggleDebug() {
+  DEBUG = !DEBUG;
+  // The editor button is only offered in debug, and the menu is laid out
+  // around a drop zone that has just appeared or gone.
+  applyPageUI();
+
+  // Built the first time it is needed rather than at startup, since debug
+  // may never be turned on at all. After that it is only shown and hidden,
+  // and keeps whatever the sliders were left at.
+  BackdropPanel.build();
+  if (BackdropPanel.root) BackdropPanel.root.classList.toggle("sp-gone", !DEBUG);
+
+  // The meters cost a clock read per measured call, so they only run while
+  // they are being looked at.
+  Perf.on = DEBUG;
+  PerfPanel.build();
+  if (PerfPanel.root) PerfPanel.root.classList.toggle("sp-gone", !DEBUG);
+
+  console.info(`DEBUG ${DEBUG ? "on" : "off"}`);
+}
+
+// The sound panel. It is built lazily rather than at startup, so the first
+// time this is switched on the panel has to be made before it can be shown;
+// after that it is only hidden, and keeps whatever was moved on it.
+function toggleSoundDebug() {
+  DEBUG_SOUND = !DEBUG_SOUND;
+
+  if (DEBUG_SOUND) {
+    SoundPanel.build();               // does nothing once it exists
+    if (SoundPanel.root) {
+      // A song loaded while the panel was away has moved SoundState under it,
+      // and audio.js only refreshes a panel that already exists. So the
+      // controls are pulled back into line with what is actually playing -
+      // rather than applyAll(), which would push the panel's stale values out
+      // over the song's own sounds.
+      SoundPanel.refresh();
+      SoundPanel.root.classList.remove("sp-hidden");
+    }
+  } else if (SoundPanel.root) {
+    SoundPanel.root.classList.add("sp-hidden");
+  }
+  console.info(`DEBUG_SOUND ${DEBUG_SOUND ? "on" : "off"}`);
+}
+
 // p5 listens on the window, so a focused DOM button would also fire on the
 // spacebar. Nothing in this app wants a button held focused after a click.
 function blurFocusedButton() {
   const active = document.activeElement;
   if (active && active !== document.body && active.blur) active.blur();
+}
+
+//////////////////////////////////////////////////////////////////////
+// FULLSCREEN
+//
+// Worth having for a show: the browser chrome is the one thing on the screen
+// that is not the piece.
+//
+// The whole document goes fullscreen, not the canvas - there are two canvases
+// and a pile of DOM on top of them, and fullscreening one of them would leave
+// the rest behind.
+//////////////////////////////////////////////////////////////////////
+
+const FULLSCREEN_LABEL = ["fullscreen", "exit fullscreen"];
+
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+// Only ever from a click or a keypress: a browser refuses the request
+// otherwise, and rightly so.
+function toggleFullscreen() {
+  if (isFullscreen()) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) exit.call(document);
+    return;
+  }
+
+  const el = document.documentElement;
+  const go = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!go) { say("fullscreen: this browser will not"); return; }
+
+  // Refusal comes back as a rejected promise rather than an exception, and it
+  // is worth saying out loud - silently doing nothing looks like a dead button.
+  Promise.resolve(go.call(el)).catch(err => say(`fullscreen refused: ${err.message}`));
+}
+
+// Entering or leaving changes the window size, so p5 gets a resize event of
+// its own and the canvases follow. What it does NOT do is relabel the button
+// or notice Escape, which is what this is for.
+function watchFullscreen() {
+  const changed = () => {
+    if (ui.fullscreen) ui.fullscreen.html(FULLSCREEN_LABEL[isFullscreen() ? 1 : 0]);
+    // The label just changed width and the top-right row is laid out from the
+    // right edge, so it has to be placed again.
+    layoutUI();
+  };
+  document.addEventListener("fullscreenchange", changed);
+  document.addEventListener("webkitfullscreenchange", changed);
 }
 
 function windowResized() {

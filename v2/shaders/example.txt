@@ -1,0 +1,54 @@
+// A stand-in backdrop, in Shadertoy's dialect: define mainImage() and the
+// game wraps it. Drifting embers over a slow warm haze, to sit under the
+// note highway without arguing with it.
+//
+// Paste any Shadertoy "Image" shader over this. What is not here: the
+// iChannel texture inputs, since there is nothing to plug into them. iTime,
+// iResolution, iMouse, iFrame, iTimeDelta and iDate all work.
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+
+    // A slow haze, warm at the bottom where the hit line is.
+    float haze = noise(p * 2.2 + vec2(0.0, iTime * 0.06))
+               + 0.5 * noise(p * 5.0 - vec2(iTime * 0.04, 0.0));
+    haze *= 0.4;
+
+    vec3 col = mix(vec3(0.03, 0.02, 0.05), vec3(0.35, 0.12, 0.03), haze * (1.0 - uv.y));
+    col += vec3(0.10, 0.05, 0.14) * haze * uv.y;
+
+    // Embers, rising. The falloff is deliberately tight - a wide one reads as
+    // a blob rather than a spark, and pushes the red channel past 1 while the
+    // others are still climbing, which turns the middle of each one green.
+    for (int i = 0; i < 16; i++) {
+        float fi = float(i);
+        float seed = hash(vec2(fi, 7.0));
+        float speed = 0.02 + seed * 0.05;
+        vec2 e = vec2(fract(seed * 3.3 + sin(iTime * 0.07 + fi) * 0.02),
+                      fract(seed + iTime * speed));
+        float d = length((uv - e) * vec2(iResolution.x / iResolution.y, 1.0));
+        float glow = 0.00006 / (d * d + 0.00003);
+        col += vec3(1.0, 0.45, 0.12) * glow * (0.25 + 0.75 * seed) * e.y;
+    }
+
+    // A vignette, so the middle of the screen stays the darkest part.
+    col *= 1.0 - 0.7 * dot(p, p);
+
+    // And a soft shoulder rather than a hard clamp, so nothing that does get
+    // bright changes hue on its way to white.
+    col = col / (1.0 + col);
+
+    fragColor = vec4(col, 1.0);
+}
