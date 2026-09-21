@@ -1574,6 +1574,24 @@ browsing data while anything is waiting.
 | email/password sign-in is not switched on in Firebase | step 3 |
 | could not load Firebase | no internet when the SDK was first needed — it tries again next time |
 
+### The standalone highscore page
+
+`highscore/`, next to `v2/` rather than inside it, is the list on its own: the
+logo burning at the top the way it does on the menu, and the scores underneath,
+one song at a time. It is meant to be put up somewhere other than the game.
+
+The folder carries everything it needs - `index.html`, `mBorchLOGO.svg` and
+the two fonts - and loads nothing from `v2/`, so copy it anywhere as it stands.
+It reads the published list straight from Firestore's REST address with **no
+API key**: the list is public by the rules, and without the key the key's
+website restrictions cannot block it, whichever domain it ends up on.
+
+The settings at the top of its script are copies of ones in `config.js`
+(`HIGHSCORES_DEFAULT_SONG`, the flame palette and title timings), and nothing
+keeps the two in step - change one, change the other. It fetches the list again
+every 60 seconds while it is on screen, for a display left up at an event, and
+`?song=Slow%20Sorrow` opens it on one song.
+
 ### Typing and the keyboard shortcuts
 
 p5 binds keys to the window, so before this the letters going into a name

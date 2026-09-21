@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shaders only</title>
+
+<!--
+  A bench for the backdrop shaders, on its own and nothing else running.
+
+  Nothing links here on purpose. It is not part of the game: it loads
+  config.js, perf.js and shaderbg.js and drives ShaderBackdrop directly, so
+  what you see is exactly what the game's backdrop would show - same compiler,
+  same preamble, same iMouse and sparks - without a song, a starfield or a HUD
+  in front of it.
+
+  Handy for: seeing whether a Shadertoy port compiles at all, reading the
+  error when it does not, and finding out what a shader costs before putting
+  it behind a song.
+-->
+
+<script src="config.js"></script>
+<script src="perf.js"></script>
+<script src="shaderbg.js"></script>
+
+<style>
+  html { background: #05050a; }
+  body {
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+    color: #e6e6f0;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  /* The canvas ShaderBackdrop makes for itself. In the game this comes from
+     style.css; here it is the whole page. */
+  #backdrop-shader {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  #hud {
+    position: fixed;
+    top: 12px; left: 12px;
+    z-index: 10;
+    width: 244px;
+    max-height: calc(100vh - 24px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    box-sizing: border-box;
+    background: rgba(8, 8, 16, 0.82);
+    border: 1px solid #2c2c3c;
+    border-radius: 8px;
+    backdrop-filter: blur(6px);
+  }
+  #hud[hidden] { display: none; }
+
+  h1 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #ffb03a;
+  }
+
+  .note { margin: 0; color: #8a8aa8; font-size: 11px; }
+  .note b { color: #b8b8cc; font-weight: 600; }
+
+  /* The list is the tall part, so it is the part that scrolls - the buttons
+     and the readout below it stay put however many shaders there are. */
+  #list {
+    flex: 1 1 auto;
+    min-height: 40px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-right: 2px;
+  }
+  #list button {
+    font: inherit;
+    text-align: left;
+    color: #c8c8dc;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 3px 6px;
+    cursor: pointer;
+  }
+  #list button:hover { background: #1b1b2a; color: #fff; }
+  #list button.on { background: #3a1d0c; color: #ffb03a; }
+  #list button.bad { color: #ff8a70; }
+
+  .bar { display: flex; flex-wrap: wrap; gap: 4px; }
+  .bar button {
+    font: inherit;
+    color: #c8c8dc;
+    background: #14141c;
+    border: 1px solid #3a3a4d;
+    border-radius: 5px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .bar button:hover { border-color: #6b6b8a; background: #1b1b26; }
+
+  label.slider { display: grid; gap: 2px; color: #8a8aa8; font-size: 11px; }
+  label.slider input { width: 100%; }
+
+  #readout { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; font-size: 11px; }
+  #readout span:nth-child(odd) { color: #8a8aa8; }
+
+  #error {
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 5px;
+    background: #2a0f0c;
+    border: 1px solid #7a3030;
+    color: #ff9a80;
+    font-size: 11px;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  #error[hidden] { display: none; }
+
+  kbd {
+    font: inherit;
+    color: #ffb03a;
+    background: #1b1b2a;
+    border: 1px solid #3a3a4d;
+    border-radius: 3px;
+    padding: 0 3px;
+  }
+
+  /* Says "press H" when the HUD is hidden, and nothing else. Without it a
+     hidden HUD on a shader that will not compile looks like a broken page. */
+  #hint {
+    position: fixed;
+    bottom: 10px; left: 12px;
+    z-index: 10;
+    color: #55556a;
+    font-size: 11px;
+    pointer-events: none;
+    transition: opacity 0.6s;
+  }
+  #hint[hidden] { display: none; }
+
+  #drop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: none;
+    place-items: center;
+    background: rgba(5, 5, 10, 0.8);
+    border: 2px dashed #ffb03a;
+    color: #ffb03a;
+    font-size: 15px;
+  }
+  #drop.on { display: grid; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <h1>shaders only</h1>
+  <p class="note" id="source">looking for shaders…</p>
+
+  <div id="list"></div>
+
+  <div class="bar">
+    <button id="full" type="button">fullscreen</button>
+    <button id="pause" type="button">pause</button>
+    <button id="reload" type="button">reload</button>
+  </div>
+
+  <label class="slider">
+    <span id="scale-label">scale 0.50</span>
+    <input id="scale" type="range" min="0.1" max="1" step="0.05" value="0.5">
+  </label>
+
+  <div id="readout">
+    <span>fps</span><span id="r-fps">–</span>
+    <span>shader cpu</span><span id="r-cpu">–</span>
+    <span>shader gpu</span><span id="r-gpu">–</span>
+    <span>buffer</span><span id="r-size">–</span>
+  </div>
+
+  <p id="error" hidden></p>
+
+  <p class="note">
+    <kbd>H</kbd> hide · <kbd>F</kbd> fullscreen · <kbd>space</kbd> pause ·
+    <kbd>R</kbd> reload · <kbd>↑</kbd><kbd>↓</kbd> pick.
+    Drop a .txt to try it without saving it here.
+  </p>
+</div>
+
+<p id="hint" hidden><kbd>H</kbd> for the controls</p>
+<div id="drop">drop a shader .txt</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Only ever a fallback. A browser cannot list a directory, so the list is
+// asked of the server first (see findShaders) and this is what is used when
+// the server will not answer - on a deployment, say, rather than off a dev
+// server. It is a list of filenames and nothing else, so a stale entry costs
+// one 404 and a message, not a wrong picture.
+const FALLBACK = [
+  "80s.txt", "80sSong.txt", "cloudsWibbly.txt", "embers.txt", "example.txt",
+  "fire.txt", "fireDS.txt", "globula.txt", "metaballs.txt", "piet.txt",
+  "plasmaRainbowTunnel.txt", "purpleOcean.txt", "purpleOceanSong.txt",
+  "rainbowField.txt", "starfield.txt"
+];
+
+const DIR = typeof BG_SHADER_DIR !== "undefined" ? BG_SHADER_DIR : "shaders/";
+
+let shaders = [];
+let current = -1;
+let scale = typeof BG_SHADER_SCALE !== "undefined" ? BG_SHADER_SCALE : 0.5;
+
+//////////////////////////////////////////////////////////////////////
+// Finding the shaders
+//////////////////////////////////////////////////////////////////////
+
+// A plain dev server - python3 -m http.server, and most others - answers a
+// request for a folder with an HTML index of it. That index is a real listing
+// of what is on disk, so it cannot go stale the way a written-down list can.
+// Anything that does not answer that way (a deployment, a server with the
+// listing turned off) falls through to FALLBACK, and the panel says which of
+// the two you are looking at rather than leaving you to guess.
+async function findShaders() {
+  try {
+    const response = await fetch(DIR, { headers: { Accept: "text/html" } });
+    if (!response.ok) throw new Error(response.status);
+    const html = await response.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const base = new URL(DIR, location.href);
+    const names = [...doc.querySelectorAll("a[href]")]
+      .map(a => new URL(a.getAttribute("href"), base).pathname)
+      .filter(path => path.toLowerCase().endsWith(".txt"))
+      .map(path => path.split("/").pop());
+    const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b));
+    if (unique.length) return { names: unique, listed: true };
+  } catch (err) {
+    // Nothing to report: not being able to list a folder is the normal case
+    // on anything but a dev server, and the fallback covers it.
+  }
+  return { names: FALLBACK.slice(), listed: false };
+}
+
+function renderList() {
+  const list = $("list");
+  list.replaceChildren();
+  shaders.forEach((name, i) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = name.replace(/\.txt$/i, "");
+    button.title = DIR + name;
+    button.onclick = () => pick(i);
+    list.appendChild(button);
+  });
+  markCurrent();
+}
+
+function markCurrent() {
+  [...$("list").children].forEach((button, i) => {
+    button.classList.toggle("on", i === current);
+  });
+}
+
+//////////////////////////////////////////////////////////////////////
+// Loading one
+//////////////////////////////////////////////////////////////////////
+
+function showError(message) {
+  $("error").hidden = !message;
+  $("error").textContent = message || "";
+  if (current >= 0) $("list").children[current].classList.toggle("bad", !!message);
+}
+
+async function pick(i, bust) {
+  if (i < 0 || i >= shaders.length) return;
+  current = i;
+  markCurrent();
+  showError("");
+
+  // use() keeps the last url in `src` and returns early when asked for it
+  // again. That is right in the game and wrong here, where asking for the same
+  // one again is how you look at a shader you have just edited. Cleared, and
+  // the url given a changing query so the browser fetches it rather than
+  // handing back the copy it already has.
+  ShaderBackdrop.src = "";
+  window.loadError = "";
+  const url = DIR + shaders[i] + (bust ? "?t=" + Date.now() : "");
+
+  const ok = await ShaderBackdrop.use(url);
+  if (!ok) {
+    showError(window.loadError || "would not load");
+    ShaderBackdrop.show(false);
+    return;
+  }
+  ShaderBackdrop.show(true);
+  ShaderBackdrop.resize();
+  ShaderBackdrop.start();
+  $("pause").textContent = "pause";
+  document.title = shaders[i].replace(/\.txt$/i, "") + " · shaders only";
+}
+
+// A file dragged onto the page: compiled straight from the text, so a shader
+// can be tried before it is saved into the folder. Mirrors what use() does
+// either side of the fetch it does not need.
+function useText(name, source) {
+  current = -1;
+  markCurrent();
+  showError("");
+  window.loadError = "";
+
+  if (!ShaderBackdrop.build()) { showError(window.loadError || "no WebGL"); return; }
+  if (!source.includes("mainImage")) {
+    showError(name + ": no mainImage() in it" + (source.trim() ? "" : " - the file is empty"));
+    return;
+  }
+  ShaderBackdrop.stop();
+  ShaderBackdrop.src = name;
+  ShaderBackdrop.program = null;
+  if (!ShaderBackdrop.compile(source, name)) {
+    showError(window.loadError || "would not compile");
+    ShaderBackdrop.show(false);
+    return;
+  }
+  ShaderBackdrop.show(true);
+  ShaderBackdrop.resize();
+  ShaderBackdrop.start();
+  $("pause").textContent = "pause";
+  document.title = name + " · shaders only";
+}
+
+//////////////////////////////////////////////////////////////////////
+// Controls
+//////////////////////////////////////////////////////////////////////
+
+// The game picks a scale from which page is showing. There are no pages here,
+// so the slider is the whole answer - and it is the knob worth having, since
+// it is the one thing that changes what a shader costs without changing the
+// shader.
+ShaderBackdrop.scaleForPage = () => scale;
+
+$("scale").oninput = (e) => {
+  scale = parseFloat(e.target.value);
+  $("scale-label").textContent = "scale " + scale.toFixed(2);
+  ShaderBackdrop.resize();
+};
+
+$("full").onclick = () => toggleFullscreen();
+$("pause").onclick = () => togglePause();
+$("reload").onclick = () => pick(current, true);
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+}
+
+function togglePause() {
+  if (!ShaderBackdrop.program) return;
+  if (ShaderBackdrop.running) {
+    ShaderBackdrop.stop();
+    $("pause").textContent = "play";
+  } else {
+    ShaderBackdrop.start();
+    $("pause").textContent = "pause";
+  }
+}
+
+function toggleHud() {
+  const hidden = !$("hud").hidden;
+  $("hud").hidden = hidden;
+  $("hint").hidden = !hidden;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key === "h") { toggleHud(); e.preventDefault(); }
+  else if (key === "f") { toggleFullscreen(); e.preventDefault(); }
+  else if (key === " ") { togglePause(); e.preventDefault(); }
+  else if (key === "r") { pick(current, true); e.preventDefault(); }
+  else if (key === "arrowdown") { pick(current + 1); e.preventDefault(); }
+  else if (key === "arrowup") { pick(current - 1); e.preventDefault(); }
+});
+
+// Dropping a file anywhere on the page. dragover has to be cancelled or the
+// browser navigates to the file instead, which loses the page.
+const drop = $("drop");
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { e.preventDefault(); if (++dragDepth === 1) drop.classList.add("on"); });
+window.addEventListener("dragover", (e) => { e.preventDefault(); });
+window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; drop.classList.remove("on"); } });
+window.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  drop.classList.remove("on");
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  useText(file.name, await file.text());
+});
+
+//////////////////////////////////////////////////////////////////////
+// The readout
+//////////////////////////////////////////////////////////////////////
+
+// Perf is what the game's own meters use, so these are the same numbers the
+// PERFORMANCE panel would show - see the top of perf.js for what they mean.
+// `shader cpu` is time on the main thread handing the draw over; `shader gpu`
+// is the GPU actually doing it, which is the one that decides whether a
+// shader can carry a song.
+Perf.on = true;
+let lastShown = null;
+
+(function meter() {
+  Perf.frameMark();
+  const s = Perf.shown;
+  if (s && s !== lastShown) {
+    lastShown = s;
+    $("r-fps").textContent = s.fps.toFixed(0);
+    $("r-cpu").textContent = (s.parts.shader || 0).toFixed(2) + " ms";
+    $("r-gpu").textContent = Perf.gpu.supported === false
+      ? "unavailable" : s.gpu.toFixed(2) + " ms";
+    const canvas = ShaderBackdrop.canvas;
+    $("r-size").textContent = canvas ? canvas.width + "×" + canvas.height : "–";
+  }
+  requestAnimationFrame(meter);
+})();
+
+//////////////////////////////////////////////////////////////////////
+
+(async function begin() {
+  $("scale").value = scale;
+  $("scale-label").textContent = "scale " + scale.toFixed(2);
+
+  const found = await findShaders();
+  shaders = found.names;
+  renderList();
+  $("source").innerHTML = found.listed
+    ? `<b>${shaders.length}</b> in ${DIR}, listed by the server.`
+    : `<b>${shaders.length}</b> from the list written into this page - the server would not list ${DIR}, so anything added since is missing.`;
+
+  // Opens on whatever the menu is set to, so the page starts on something
+  // known to work rather than on whatever sorts first.
+  const menu = typeof BG_VIDEO_MENU !== "undefined" ? String(BG_VIDEO_MENU).split("/").pop() : "";
+  const at = shaders.indexOf(menu);
+  pick(at >= 0 ? at : 0);
+})();
+</script>
+</body>
+</html>

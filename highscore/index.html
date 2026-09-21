@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>micro:bit Orchestra Hero · Highscores</title>
+
+<!--
+  The highscore list on its own, for putting up anywhere.
+
+  EVERYTHING THIS PAGE NEEDS IS IN THIS FOLDER: the logo, the two fonts, the
+  backdrop shader, and this file. Nothing is loaded from the game, so the folder can be copied to
+  any server - or any other domain - as it stands.
+
+  It reads the same published list the game's HIGHSCORES page reads: one
+  document, one read, straight from Firestore's REST address. No Firebase
+  library, no sign-in, and no API key - the list is public by the database
+  rules, so it does not need one, and leaving it out means the key's website
+  restrictions cannot block this page wherever it ends up.
+
+  The settings below are copies of ones in the game's config.js. If a song is
+  renamed there, or the palette changed, change them here too; nothing keeps
+  the two in step.
+
+  ?song=Slow%20Sorrow in the address opens on that song, for a screen at an
+  event that should only ever show one.
+-->
+
+<link rel="preload" as="font" type="font/ttf" href="fonts/Nightmare_Hero_Normal.ttf" crossorigin>
+<link rel="preload" as="font" type="font/ttf" href="fonts/hankenround-Regular.ttf" crossorigin>
+
+<style>
+  @font-face {
+    font-family: "Nightmare Hero";
+    src: url("fonts/Nightmare_Hero_Normal.ttf") format("truetype");
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "hanken round";
+    src: url("fonts/hankenround-Regular.ttf") format("truetype");
+    font-display: swap;
+  }
+
+  :root {
+    --ink: #ece9f2;
+    --dim: #8b87a0;
+    --faint: #57546a;
+    --gold: #ffd23c;
+    --ember: #ff8c1a;
+    --flame: linear-gradient(100deg, #ff4a10 0%, #ff8c1a 38%, #ffd76a 62%, #ff5a12 100%);
+    --rule: rgba(255, 140, 26, 0.14);
+  }
+
+  html {
+    background: #07060b;
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    padding-inline: 16px;
+    color: var(--ink);
+    font: 15px/1.4 "hanken round", ui-rounded, system-ui, sans-serif;
+    /* A warm light behind the logo, fading out down the page, so the fire has
+       something to sit in rather than floating on flat black. */
+    /* Sized in pixels and pinned to the top. As percentages they would be a
+       share of the body, which with a thousand rows in it is enormous, and
+       the light would smear down the whole list. */
+    background:
+      radial-gradient(ellipse 900px 520px at 50% 0, rgba(255, 90, 16, 0.16), transparent 70%),
+      radial-gradient(ellipse 520px 300px at 50% 180px, rgba(255, 170, 60, 0.07), transparent 70%);
+    background-repeat: no-repeat;
+  }
+
+  /* The shader backdrop. Behind everything, including the body's warm glow,
+     which is mostly transparent and so lies over it as a light rather than
+     hiding it. Starts invisible and fades up once it has a frame to show, so
+     a slow start is a fade rather than a black flash. */
+  #backdrop {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 1.2s ease;
+  }
+  #backdrop.on { opacity: var(--backdrop-opacity, 1); }
+
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding-block: clamp(20px, 5vw, 48px) 64px;
+  }
+
+  /* ---- the logo ---- */
+
+  .logo {
+    display: block;
+    width: min(100%, 820px);
+    margin: 0 auto;
+    aspect-ratio: 406.378 / 227.468;   /* the SVG's own, so nothing jumps when it loads */
+  }
+  .logo canvas { display: block; width: 100%; height: 100%; }
+
+  /* ---- the song ---- */
+
+  .songs {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin: clamp(18px, 4vw, 34px) 0 0;
+  }
+  .songs[hidden] { display: none; }
+
+  .songs button {
+    font: inherit;
+    font-size: 13px;
+    color: var(--dim);
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    padding: 5px 14px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+  }
+  .songs button:hover { color: var(--ink); border-color: rgba(255, 176, 58, 0.45); }
+  .songs button[aria-pressed="true"] {
+    color: #ffd76a;
+    border-color: #ffb03a;
+    background: rgba(255, 176, 58, 0.12);
+  }
+  .songs .count { color: var(--faint); margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .songs button[aria-pressed="true"] .count { color: #c98a4b; }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    justify-content: space-between;
+    gap: 10px 20px;
+    margin: clamp(22px, 4vw, 36px) 0 12px;
+  }
+
+  /* The word under the logo. Same fire as the song name below it, but
+     bigger, centred, and with a slower sheen so the two do not flicker in
+     step. Pulled up into the logo's glow rather than sitting a gap below it. */
+  h1 {
+    margin: clamp(-4px, -1vw, 0px) 0 0;
+    text-align: center;
+    font-family: "Nightmare Hero", "hanken round", sans-serif;
+    font-weight: normal;
+    font-size: clamp(40px, 9vw, 84px);
+    line-height: 1;
+    letter-spacing: 0.06em;
+    background: var(--flame);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 22px rgba(255, 110, 20, 0.45));
+    animation: sheen 11s linear infinite;
+  }
+
+  h2 {
+    margin: 0;
+    font-family: "Nightmare Hero", "hanken round", sans-serif;
+    font-weight: normal;
+    font-size: clamp(30px, 6vw, 50px);
+    line-height: 1;
+    letter-spacing: 0.04em;
+    background: var(--flame);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 14px rgba(255, 110, 20, 0.35));
+    animation: sheen 7s linear infinite;
+  }
+
+  .find {
+    font: inherit;
+    font-size: 14px;
+    color: var(--ink);
+    width: 220px;
+    max-width: 100%;
+    min-width: 0;
+    background: none;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+    padding: 4px 2px;
+    transition: border-color 0.2s;
+  }
+  .find::placeholder { color: var(--faint); }
+  .find:focus { outline: none; border-bottom-color: var(--ember); }
+
+  /* ---- the list ---- */
+
+  .cols,
+  .row {
+    display: grid;
+    /* rem, not em: the podium rows set bigger type, and em columns would
+       widen with it and knock their names out of line with the rest. */
+    grid-template-columns: 3rem 1.5rem minmax(0, 1.25fr) minmax(0, 1fr) 6rem 4.5rem;
+    gap: 10px;
+    align-items: baseline;
+    padding-inline: 10px;
+  }
+
+  .cols {
+    padding-block: 6px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .cols .n { text-align: right; }
+
+  .row {
+    padding-block: 7px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+    /* Well over a thousand rows: the browser skips laying out the ones that
+       are nowhere near the screen. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 36px;
+  }
+
+  .pos { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .name, .loc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .loc { color: #c98a4b; }
+  .date { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .score { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .star { text-align: center; }
+
+  /* The podium. Bigger, and numbered in the fire's colours - first the
+     hottest, third the coolest - so the top of the list reads from across a
+     room without needing a box drawn round it. */
+  .row.top {
+    padding-block: 12px;
+    font-size: 19px;
+  }
+  .row.top .pos {
+    font-family: "Nightmare Hero", "hanken round", sans-serif;
+    font-size: 28px;
+    line-height: 0.9;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .row.p1 .pos { background-image: linear-gradient(180deg, #fff3b8, #ffd23c 45%, #ff9a1a); filter: drop-shadow(0 0 10px rgba(255, 190, 50, 0.5)); }
+  .row.p2 .pos { background-image: linear-gradient(180deg, #ffe0a0, #ffa53a 50%, #ff6a1a); filter: drop-shadow(0 0 8px rgba(255, 140, 30, 0.35)); }
+  .row.p3 .pos { background-image: linear-gradient(180deg, #ffc890, #ff7a2a 50%, #d8400e); filter: drop-shadow(0 0 6px rgba(255, 100, 20, 0.3)); }
+  .row.p1 .score { color: #ffe08a; }
+  .row.top .date { font-size: 13px; }
+  .row.p3 { border-bottom-color: var(--rule); }
+
+  .row.bonus .name { color: #ffe9b0; }
+
+  .empty { padding: 48px 0; text-align: center; color: var(--dim); }
+
+  footer {
+    margin-top: 22px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--faint);
+  }
+  footer .bad { color: #ff8a70; }
+
+  /* ---- the bonus star, as in the game ----
+     Gold with a sheen, a glow, a slow twinkle, and two glints off its points.
+     The glow is a filter rather than a text-shadow because the gold is the
+     background showing through the letter, which text-shadow cannot follow. */
+  .star-on {
+    position: relative;
+    display: inline-block;
+    font-size: 1.3em;
+    line-height: 1;
+    vertical-align: -0.12em;
+    background: linear-gradient(115deg, #fff7d1 0%, #ffd23c 28%, #ff9a1a 50%, #fff3b0 70%, #ffd23c 100%);
+    background-size: 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 2px rgba(255, 235, 150, 1)) drop-shadow(0 0 7px rgba(255, 170, 40, 0.9))
+            drop-shadow(0 0 16px rgba(255, 90, 10, 0.55));
+    animation: twinkle 2.4s ease-in-out infinite, star-sheen 2.8s linear infinite;
+    animation-delay: var(--twinkle, 0s), 0s;
+  }
+  .star-on::before,
+  .star-on::after {
+    content: "✦";
+    position: absolute;
+    background: none;
+    -webkit-text-fill-color: #fffbe6;
+    opacity: 0;
+    pointer-events: none;
+    animation: glint 2.4s ease-in-out infinite;
+  }
+  .star-on::before { top: -3px; right: -7px; font-size: 10px; animation-delay: calc(var(--twinkle, 0s) - 0.4s); }
+  .star-on::after  { bottom: 0; left: -7px; font-size: 7px; animation-delay: calc(var(--twinkle, 0s) - 1.6s); }
+
+  @keyframes twinkle {
+    0%, 100% { transform: scale(1) rotate(0deg); }
+    50%      { transform: scale(1.3) rotate(18deg); }
+  }
+  @keyframes star-sheen {
+    from { background-position: 100% 0; }
+    to   { background-position: -150% 0; }
+  }
+  @keyframes glint {
+    0%, 30%, 100% { opacity: 0; transform: scale(0.2) rotate(0deg); }
+    45%           { opacity: 1; transform: scale(1.15) rotate(45deg); }
+    60%           { opacity: 0; transform: scale(0.4) rotate(90deg); }
+  }
+  @keyframes sheen {
+    from { background-position: 0% 0; }
+    to   { background-position: -200% 0; }
+  }
+
+  /* Narrow screens: the date goes, and where they played moves under the name
+     rather than squeezing both to three letters each. */
+  @media (max-width: 600px) {
+    .cols, .row { grid-template-columns: 2.2rem 1.2rem minmax(0, 1fr) 3.4rem; gap: 8px; padding-inline: 4px; }
+    .cols .c-loc, .cols .c-date, .row .date { display: none; }
+    .row .loc { grid-column: 3; grid-row: 2; font-size: 12px; margin-top: -2px; }
+    .row .score { grid-column: 4; grid-row: 1; }
+    .row.top { font-size: 17px; }
+    .row.top .pos { font-size: 23px; }
+  }
+
+  /* Still gold and still glowing for anyone who has asked for less motion -
+     just not moving. The logo holds still too; see drawLogo(). */
+  @media (prefers-reduced-motion: reduce) {
+    h1, h2, .star-on, .star-on::before, .star-on::after { animation: none; }
+    .star-on::before, .star-on::after { opacity: 0.85; }
+  }
+</style>
+</head>
+<body>
+<canvas id="backdrop" aria-hidden="true"></canvas>
+<main>
+  <div class="logo" role="img" aria-label="micro:bit Orchestra Hero"><canvas id="logo"></canvas></div>
+  <h1>Highscores</h1>
+
+  <nav class="songs" id="songs" aria-label="songs" hidden></nav>
+
+  <div class="head">
+    <h2 id="song"></h2>
+    <input class="find" id="find" type="search" placeholder="find a name or a place" aria-label="find a name or a place">
+  </div>
+
+  <div class="cols" aria-hidden="true">
+    <span class="n">#</span><span></span><span>name</span><span class="c-loc">played at</span>
+    <span class="c-date">date</span><span class="n">score</span>
+  </div>
+  <div id="list"><div class="empty">loading…</div></div>
+
+  <footer id="status"></footer>
+</main>
+
+<script>
+//////////////////////////////////////////////////////////////////////
+// Settings - copies of the game's, see the note at the top
+//////////////////////////////////////////////////////////////////////
+
+// Where the published list lives. The same document the game writes.
+const PROJECT_ID = "mbohscores";
+const TABLE_DOC = "highscores_meta/table";
+
+// What an entry from before the game recorded songs is shown under. Has to
+// match the song's name exactly, or the old scores become a list of their own.
+const DEFAULT_SONG = "The O.G.";
+
+// How often to fetch the list again while the page is open, for a screen left
+// up at an event. One read each time: a whole day at 60s is about 1,400 reads
+// against the free plan's 50,000. 0 turns it off.
+const REFRESH_SECONDS = 60;
+
+// The logo's fire. These are the game's "flame" palette and title timings -
+// TITLE_PALETTES.flame and TITLE_* in config.js - so it burns the same.
+const PALETTE = { hue: [4, 48], sat: 98, light: [30, 78], glowLight: 50 };
+const HUE_SPEED = 0.11;
+const HUE_SPREAD = 0.8;
+const PULSE_RATE = 0.45;
+const PULSE_SPREAD = 1.0;
+const PULSE_SHARPNESS = 2.5;
+const GLOW = 0.20;
+const GLOW_COPIES = 6;
+const GRADIENT_STOPS = 14;
+// The game's glow ring sits 5px out on a 300px-tall logo. Given here as a
+// share of the height instead, so it looks the same at whatever size the
+// logo comes out - which on this page is a lot bigger.
+const GLOW_RADIUS = 5 / 300;
+
+// The moving backdrop - the same shader the game's HIGHSCORES page shows
+// (BG_SHADER_HIGHSCORE in config.js). Any Shadertoy-style .txt that works as a
+// backdrop in the game works here: copy it into shaders/ and name it. "" for
+// none, and the page is plain dark.
+const BACKDROP = "shaders/embers.txt";
+// A share of the screen's resolution to render at, as BG_SHADER_SCALE in the
+// game. The GPU scales it up; behind text, nobody can tell, and it costs a
+// quarter as much at 0.5.
+const BACKDROP_SCALE = 0.5;
+// How much of it shows through, 0..1. The game's highscores sit in a panel;
+// here the scores are straight on top, so the knob is here if it ever gets in
+// the way of reading them.
+const BACKDROP_OPACITY = 1;
+
+//////////////////////////////////////////////////////////////////////
+
+const $ = id => document.getElementById(id);
+const stillness = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+//////////////////////////////////////////////////////////////////////
+// The logo
+//
+// The SVG is a flat black drawing. It is rasterised once at the size it is
+// shown, then used as a stencil: a gradient painted "source-in" keeps only
+// the pixels the artwork covers, so a black silhouette carries the flame.
+// Exactly how the game's menu does it (drawTitleLogo in sketch.js), with the
+// colour law from titleStop() in game.js.
+//////////////////////////////////////////////////////////////////////
+
+const Logo = {
+  img: null,
+  canvas: $("logo"),
+  mask: null,       // the artwork at the current size
+  tint: null,       // scratch canvas the stencil is painted on
+  pad: 0,           // room round the edge for the glow to spill into
+
+  load() {
+    this.img = new Image();
+    this.img.onload = () => { this.fit(); this.loop(); };
+    this.img.src = "mBorchLOGO.svg";
+    new ResizeObserver(() => this.fit()).observe(this.canvas.parentElement);
+  },
+
+  // Sized in device pixels, so it is sharp on a retina screen rather than a
+  // 1x drawing stretched.
+  fit() {
+    if (!this.img || !this.img.complete) return;
+    const box = this.canvas.parentElement.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(box.width * dpr));
+    const h = Math.max(1, Math.round(box.height * dpr));
+    if (this.canvas.width === w && this.canvas.height === h) return;
+    this.canvas.width = w;
+    this.canvas.height = h;
+
+    // The artwork is drawn a little inside the canvas so the glow has room
+    // and is not cut off square at the edges.
+    this.pad = Math.ceil(h * GLOW_RADIUS) + 2;
+    const mw = w - this.pad * 2, mh = h - this.pad * 2;
+    this.mask = document.createElement("canvas");
+    this.mask.width = mw;
+    this.mask.height = mh;
+    this.mask.getContext("2d").drawImage(this.img, 0, 0, mw, mh);
+
+    this.tint = document.createElement("canvas");
+    this.tint.width = mw;
+    this.tint.height = mh;
+    this.draw(performance.now() / 1000);
+  },
+
+  // One point along the flame: `band` is the travelling pulse, and on this
+  // palette it is heat - it drives the hue up the range as well as the light,
+  // which is what makes it read as fire rather than a colour getting brighter.
+  stop(flow, band) {
+    const shimmer = 0.5 + 0.5 * Math.sin(flow * Math.PI * 2);
+    const heat = Math.min(1, Math.max(0, 0.72 * band + 0.28 * shimmer));
+    const mix = (a, b, f) => a + (b - a) * f;
+    return {
+      h: mix(PALETTE.hue[0], PALETTE.hue[1], heat),
+      s: PALETTE.sat - heat * 10,
+      l: mix(PALETTE.light[0], PALETTE.light[1], heat),
+      lit: heat
+    };
+  },
+
+  gradients(ctx, width, t) {
+    const grad = ctx.createLinearGradient(0, 0, width, 0);
+    const glow = ctx.createLinearGradient(0, 0, width, 0);
+    for (let i = 0; i <= GRADIENT_STOPS; i++) {
+      const f = i / GRADIENT_STOPS;
+      const flow = ((((t * HUE_SPEED + f * HUE_SPREAD) % 1) + 1) % 1);
+      const phase = (t * PULSE_RATE - f * PULSE_SPREAD) * Math.PI * 2;
+      const band = Math.pow(0.5 + 0.5 * Math.sin(phase), PULSE_SHARPNESS);
+      const c = this.stop(flow, band);
+      grad.addColorStop(f, `hsl(${c.h}, ${c.s}%, ${c.l}%)`);
+      glow.addColorStop(f, `hsla(${c.h}, ${c.s}%, ${PALETTE.glowLight}%, ${0.03 + c.lit * GLOW})`);
+    }
+    return { grad, glow };
+  },
+
+  paint(style) {
+    const c = this.tint.getContext("2d");
+    c.globalCompositeOperation = "source-over";
+    c.clearRect(0, 0, this.tint.width, this.tint.height);
+    c.drawImage(this.mask, 0, 0);
+    c.globalCompositeOperation = "source-in";
+    c.fillStyle = style;
+    c.fillRect(0, 0, this.tint.width, this.tint.height);
+    c.globalCompositeOperation = "source-over";
+    return this.tint;
+  },
+
+  draw(t) {
+    if (!this.mask) return;
+    const ctx = this.canvas.getContext("2d");
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+    const { grad, glow } = this.gradients(this.tint.getContext("2d"), this.mask.width, t);
+    const radius = this.canvas.height * GLOW_RADIUS;
+
+    // Glow first, as a ring of faint copies, then the logo itself over them.
+    const lit = this.paint(glow);
+    for (let i = 0; i < GLOW_COPIES; i++) {
+      const a = (i / GLOW_COPIES) * Math.PI * 2;
+      ctx.drawImage(lit, this.pad + Math.cos(a) * radius, this.pad + Math.sin(a) * radius);
+    }
+    ctx.drawImage(this.paint(grad), this.pad, this.pad);
+  },
+
+  // Held on one frame for anyone who has asked for less motion - still lit,
+  // just not moving - and not drawn at all while the tab is hidden.
+  loop() {
+    const tick = (now) => {
+      if (!document.hidden && !stillness.matches) this.draw(now / 1000);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////
+// The backdrop
+//
+// A trimmed copy of the game's ShaderBackdrop (shaderbg.js). The preamble is
+// the game's word for word - the Shadertoy uniforms, plus the spark array and
+// sparkAge() the game adds - so a shader that compiles there compiles here.
+// Sparks are declared but never struck, and the mouse sits in the middle:
+// this is a display, not something to play with.
+//////////////////////////////////////////////////////////////////////
+
+const SPARKS = 28;          // BG_SHADER_SPARKS - only the array size matters here
+const SPARK_LIFE = 2.2;     // BG_SHADER_SPARK_LIFE
+
+const PREAMBLE = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec3  iResolution;
+uniform float iTime;
+uniform float iTimeDelta;
+uniform int   iFrame;
+uniform vec4  iMouse;
+uniform vec4  iDate;
+uniform float iSampleRate;
+uniform vec4 iSpark[${SPARKS}];
+float sparkAge(float life) { return (1.0 - life) * ${SPARK_LIFE.toFixed(3)}; }
+`;
+const EPILOGUE = `
+void main() {
+  vec4 colour = vec4(0.0, 0.0, 0.0, 1.0);
+  mainImage(colour, gl_FragCoord.xy);
+  gl_FragColor = vec4(colour.rgb, 1.0);
+}
+`;
+const VERTEX = `attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+const Backdrop = {
+  canvas: $("backdrop"),
+  gl: null,
+  program: null,
+  u: {},
+  time: 0,
+  frames: 0,
+  last: 0,
+
+  async start() {
+    if (!BACKDROP) return;
+    const gl = this.canvas.getContext("webgl", {
+      alpha: false, antialias: false, depth: false, stencil: false,
+      powerPreference: "low-power"
+    });
+    // No WebGL, a missing file, a shader that will not compile: the page
+    // simply stays plain. A backdrop is never a reason for the scores not to
+    // show, so every failure here is a console line and nothing more.
+    if (!gl) return console.warn("backdrop: no WebGL");
+    this.gl = gl;
+
+    let source;
+    try {
+      const response = await fetch(BACKDROP);
+      if (!response.ok) throw new Error(response.status);
+      source = await response.text();
+    } catch (err) {
+      return console.warn(`backdrop: could not load ${BACKDROP} (${err.message})`);
+    }
+
+    // Asked for before compiling, as the game does: a shader using fwidth()
+    // needs the context to have the extension, not just the #extension line.
+    const derivatives = !!gl.getExtension("OES_standard_derivatives");
+    const head = derivatives ? "#extension GL_OES_standard_derivatives : enable\n" : "";
+
+    const part = (kind, text) => {
+      const sh = gl.createShader(kind);
+      gl.shaderSource(sh, text);
+      gl.compileShader(sh);
+      if (gl.getShaderParameter(sh, gl.COMPILE_STATUS)) return sh;
+      console.warn(`backdrop: ${BACKDROP} would not compile\n` + gl.getShaderInfoLog(sh));
+      return null;
+    };
+    const vert = part(gl.VERTEX_SHADER, VERTEX);
+    const frag = part(gl.FRAGMENT_SHADER, head + PREAMBLE + "\n" + source + "\n" + EPILOGUE);
+    if (!vert || !frag) return;
+
+    const program = gl.createProgram();
+    gl.attachShader(program, vert);
+    gl.attachShader(program, frag);
+    gl.bindAttribLocation(program, 0, "aPos");
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      return console.warn("backdrop: would not link\n" + gl.getProgramInfoLog(program));
+    }
+    this.program = program;
+    for (const name of ["iResolution", "iTime", "iTimeDelta", "iFrame", "iMouse", "iDate", "iSampleRate"]) {
+      this.u[name] = gl.getUniformLocation(program, name);
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.useProgram(program);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    window.addEventListener("resize", () => this.resize());
+    this.resize();
+    this.canvas.style.setProperty("--backdrop-opacity", BACKDROP_OPACITY);
+
+    this.last = performance.now();
+    const tick = (now) => {
+      // Clamped: a tab brought back from the background hands over one huge
+      // gap, and iTime would jump the picture forward by all of it.
+      const delta = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
+      this.last = now;
+      if (!stillness.matches) this.time += delta;
+      this.draw(delta);
+      // Faded up after the first real frame, not before - until then there
+      // is nothing on the canvas but black.
+      if (this.frames === 1) this.canvas.classList.add("on");
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  },
+
+  resize() {
+    if (!this.gl) return;
+    const scale = Math.max(0.1, Math.min(1, BACKDROP_SCALE));
+    const w = Math.max(1, Math.round(window.innerWidth * scale));
+    const h = Math.max(1, Math.round(window.innerHeight * scale));
+    if (this.canvas.width === w && this.canvas.height === h) return;
+    this.canvas.width = w;
+    this.canvas.height = h;
+    this.gl.viewport(0, 0, w, h);
+  },
+
+  draw(delta) {
+    const { gl, u, canvas } = this;
+    const w = canvas.width, h = canvas.height;
+    if (u.iResolution) gl.uniform3f(u.iResolution, w, h, 1);
+    if (u.iTime) gl.uniform1f(u.iTime, this.time);
+    if (u.iTimeDelta) gl.uniform1f(u.iTimeDelta, delta);
+    if (u.iFrame) gl.uniform1i(u.iFrame, this.frames);
+    if (u.iMouse) gl.uniform4f(u.iMouse, w / 2, h / 2, -w / 2, h / 2);
+    if (u.iSampleRate) gl.uniform1f(u.iSampleRate, 44100);
+    if (u.iDate) {
+      const d = new Date();
+      gl.uniform4f(u.iDate, d.getFullYear(), d.getMonth(), d.getDate(),
+        d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds());
+    }
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this.frames++;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////
+// The list
+//////////////////////////////////////////////////////////////////////
+
+const Board = {
+  entries: [],
+  song: new URLSearchParams(location.search).get("song"),
+  loading: false,
+
+  url() {
+    return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(PROJECT_ID)}` +
+           `/databases/(default)/documents/${TABLE_DOC}`;
+  },
+
+  async load() {
+    if (this.loading) return;
+    this.loading = true;
+    try {
+      const response = await fetch(this.url(), { cache: "no-store" });
+      if (response.status === 404) { this.entries = []; this.render(); this.say("nothing published yet"); return; }
+      if (!response.ok) throw new Error(`the database answered ${response.status}`);
+      const doc = await response.json();
+      const json = doc && doc.fields && doc.fields.json && doc.fields.json.stringValue;
+      const list = JSON.parse(json || "[]");
+      if (!Array.isArray(list)) throw new Error("the published list is damaged");
+      this.entries = this.rank(list);
+      this.render();
+      this.say(null);
+    } catch (err) {
+      // A list already on screen stays there: a screen at an event whose wifi
+      // blinks should keep showing the scores, not swap them for an error.
+      if (!this.entries.length) $("list").replaceChildren(el("div", { className: "empty", textContent: "the highscores could not be loaded" }));
+      this.say(err.message || "could not load", true);
+    } finally {
+      this.loading = false;
+    }
+  },
+
+  // As Highscores.rank() in the game: per song, highest first, equal scores
+  // sharing a position (two 5ths, then a 7th), ties in the order they were set.
+  rank(entries) {
+    const bySong = new Map();
+    for (const e of entries) {
+      const song = e.song || DEFAULT_SONG;
+      if (!bySong.has(song)) bySong.set(song, []);
+      bySong.get(song).push(e);
+    }
+    const out = [];
+    for (const [song, list] of bySong) {
+      const sorted = list.slice().sort((a, b) => (b.score - a.score) || ((a.order || 0) - (b.order || 0)));
+      let position = 0, last = null;
+      sorted.forEach((e, i) => {
+        if (e.score !== last) { position = i + 1; last = e.score; }
+        out.push(Object.assign({}, e, { song, position }));
+      });
+    }
+    return out;
+  },
+
+  songs() {
+    const counts = new Map();
+    for (const e of this.entries) counts.set(e.song, (counts.get(e.song) || 0) + 1);
+    return [...counts.entries()]
+      .map(([song, count]) => ({ song, count }))
+      .sort((a, b) => b.count - a.count || a.song.localeCompare(b.song));
+  },
+
+  render() {
+    const songs = this.songs();
+    // The song asked for has to exist; if not - first load, a typo in ?song=,
+    // or its scores all deleted - the busiest one is shown.
+    if (!songs.some(s => s.song === this.song)) this.song = songs.length ? songs[0].song : null;
+
+    const nav = $("songs");
+    nav.replaceChildren(...songs.map(({ song, count }) => {
+      const button = el("button", { type: "button", textContent: song });
+      button.setAttribute("aria-pressed", String(song === this.song));
+      button.append(el("span", { className: "count", textContent: count }));
+      button.onclick = () => { this.song = song; this.render(); };
+      return button;
+    }));
+    nav.hidden = songs.length < 2;
+    $("song").textContent = this.song || "";
+
+    const q = $("find").value.trim().toLowerCase();
+    const forSong = this.entries.filter(e => e.song === this.song);
+    const shown = q ? forSong.filter(e => `${e.name} ${e.location}`.toLowerCase().includes(q)) : forSong;
+
+    const frag = document.createDocumentFragment();
+    for (const e of shown) {
+      const top = e.position <= 3;
+      const row = el("div", {
+        className: "row" + (top ? ` top p${e.position}` : "") + (e.bonus ? " bonus" : "")
+      });
+      const star = el("span", { className: "star" });
+      if (e.bonus) {
+        const glint = el("span", { className: "star-on", textContent: "★", title: "bonus star" });
+        // Each star at its own point in the twinkle, so a screen of them
+        // sparkles rather than pulsing in unison.
+        glint.style.setProperty("--twinkle", `${-((e.position * 0.37) % 2.4).toFixed(2)}s`);
+        star.append(glint);
+      }
+      row.append(
+        el("span", { className: "pos", textContent: e.position }),
+        star,
+        el("span", { className: "name", textContent: e.name, title: e.name }),
+        el("span", { className: "loc", textContent: e.location, title: e.location }),
+        el("span", { className: "date", textContent: e.date || "" }),
+        el("span", { className: "score", textContent: e.score })
+      );
+      frag.append(row);
+    }
+    if (!shown.length) {
+      frag.append(el("div", { className: "empty", textContent: forSong.length ? "nobody by that name here" : "no scores yet" }));
+    }
+    $("list").replaceChildren(frag);
+  },
+
+  say(problem, bad) {
+    const status = $("status");
+    const n = this.entries.filter(e => e.song === this.song).length;
+    const when = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    status.replaceChildren();
+    if (problem) status.append(el("span", { className: bad ? "bad" : "", textContent: problem }), " · ");
+    status.append(`${n} score${n === 1 ? "" : "s"} on ${this.song || "this list"} · updated ${when}`);
+  }
+};
+
+function el(tag, props) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) node[k] = v;
+  return node;
+}
+
+$("find").addEventListener("input", () => Board.render());
+
+Logo.load();
+// The scores first, the backdrop once they are on screen. On a weak machine a
+// shader can hold up everything else on the page, and the list is the point
+// of it; a backdrop that arrives a moment late just fades up behind it.
+Board.load().finally(() => Backdrop.start());
+if (REFRESH_SECONDS > 0) {
+  // Only while someone can see it. A tab left open in the background all week
+  // is a lot of reads for nobody.
+  setInterval(() => { if (!document.hidden) Board.load(); }, REFRESH_SECONDS * 1000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) Board.load(); });
+</script>
+</body>
+</html>
