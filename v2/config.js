@@ -396,10 +396,14 @@ const SCORE_CONTROLLER_BASE = 0;
 // play go down. One letter each, to match the protocol that is already there.
 //
 //   R  reset every controller's score to zero
-//   S  ask every controller to report its score, which comes back as the
+//   Q  ask every controller to report its score, which comes back as the
 //      "S1, 45" lines below
+//
+// Q, not S: the step sequencer shares this game master micro:bit and sends
+// solo messages that start with S ("S00#m#t9#"), so an S here would have to
+// be told apart from those on the micro:bit, one character further in.
 const MICROBIT_RESET_SCORES = "R";
-const MICROBIT_REQUEST_SCORES = "S";
+const MICROBIT_REQUEST_SCORES = "Q";
 
 // How long a line of feedback stays on the menu before fading out.
 const NOTICE_SECONDS = 3.5;
@@ -617,6 +621,17 @@ const CUTOFF_HZ = [60, 14000];
 let DEBUG = false;
 
 let DEBUG_SOUND = false;
+
+// Every line to and from the micro:bit, in the console - the exact string,
+// with the newline and any stray characters shown, plus what the receiving
+// end made of it. ⌘⇧U toggles it while the app is running.
+//
+// It also prints the command letters in use when a micro:bit connects. That
+// line is worth reading: the browser can be running an OLD config.js while the
+// file on disk says something else - a cached script, or a page served out of
+// a stale build - and then the game sends a letter the micro:bit does not know
+// and simply appears to do nothing. What this prints is what is really loaded.
+let DEBUG_SERIAL = false;
 
 //////////////////////////////////////////////////////////////////////
 // LOOK

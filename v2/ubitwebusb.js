@@ -85,6 +85,30 @@ function uBitEventHandler(reason, device, data) {
 const MICROBIT_VENDOR_ID = 0x0d28
 const MICROBIT_PRODUCT_ID = 0x0204
 
+// ---- the serial log -------------------------------------------------------
+// What actually went down the wire, and what came back, when DEBUG_SERIAL is
+// on. Strings are shown as JSON so a newline reads as \n rather than as a
+// line break, and anything unprintable is shown by code - an invisible
+// character in a command is otherwise impossible to see.
+function serialLog(arrow, text, note) {
+  if (typeof DEBUG_SERIAL === "undefined" || !DEBUG_SERIAL) return;
+  const s = String(text);
+  const odd = [...s].some(c => c.charCodeAt(0) < 32 && c !== "\n" && c !== "\r");
+  const codes = odd ? "  codes: " + [...s].map(c => c.charCodeAt(0)).join(" ") : "";
+  console.log(`micro:bit ${arrow} ${JSON.stringify(s)}${note ? "  " + note : ""}${codes}`);
+}
+
+// The letters this build is really using, printed on connect. See DEBUG_SERIAL
+// in config.js for why that is worth knowing.
+function serialLogCommands() {
+  if (typeof DEBUG_SERIAL === "undefined" || !DEBUG_SERIAL) return;
+  const reset = typeof MICROBIT_RESET_SCORES !== "undefined" ? MICROBIT_RESET_SCORES : "?";
+  const ask = typeof MICROBIT_REQUEST_SCORES !== "undefined" ? MICROBIT_REQUEST_SCORES : "?";
+  console.log(`micro:bit commands in this build: A/B/X to play, ` +
+              `${JSON.stringify(reset)} reset scores, ${JSON.stringify(ask)} request scores`);
+}
+// ---------------------------------------------------------------------------
+
 let CONSOLE_LOG = false;
 let LOG_ALL_DATA = false;
 
@@ -105,6 +129,7 @@ async function uBitOpenDevice(device, callback) {
     device.target = target;   // Store the target in the device object (needed for write)
     device.callback = callback // Store the callback for the device
     callback("connected", device, null)
+    serialLogCommands()
 
     let lineParser = () => {
         let firstNewline = buffer.indexOf("\n")
@@ -132,10 +157,12 @@ async function uBitOpenDevice(device, callback) {
                     data: data
                 }
                 callback(callbackType, device, dataBundle)
+                serialLog("<-", messageToNewline, `read as ${callbackType}: ${JSON.stringify(graph)} = ${JSON.stringify(data)}`)
             } else {
                 // Not a graph format.  Send it as a console bundle
                 let dataBundle = {time: now, data: messageToNewline}
                 callback("console", device, dataBundle)
+                serialLog("<-", messageToNewline, "read as console (no colon in it)")
             }
             buffer = buffer.slice(firstNewline+1)  // Advance to after newline
             firstNewline = buffer.indexOf("\n")    // See if there's more data
@@ -197,9 +224,14 @@ async function uBitDisconnect(device) {
  */
 function uBitSend(device, data) {
     // A send can arrive before connect() has finished, or after an unplug.
-    if(!device || !device.opened || !device.target)
+    // Logged either way: a command that went nowhere looks exactly like one
+    // the micro:bit ignored, and they need telling apart.
+    if(!device || !device.opened || !device.target) {
+        serialLog("->", data + "\n", "NOT SENT - no micro:bit connected")
         return
+    }
     let fullLine = data+'\n'
+    serialLog("->", fullLine)
     device.target.serialWrite(fullLine)
 }
 

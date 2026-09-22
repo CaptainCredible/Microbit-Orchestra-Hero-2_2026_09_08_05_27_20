@@ -2841,6 +2841,7 @@ function keyPressed(event) {
   if (event && event.shiftKey && (event.metaKey || event.ctrlKey)) {
     if (event.code === "KeyD") { toggleDebug(); return false; }
     if (event.code === "KeyS") { toggleSoundDebug(); return false; }
+    if (event.code === "KeyU") { toggleSerialDebug(); return false; }
   }
 
   if (typingInAField() && keyCode !== ESCAPE) return;
@@ -2916,6 +2917,19 @@ function toggleDebug() {
 // The sound panel. It is built lazily rather than at startup, so the first
 // time this is switched on the panel has to be made before it can be shown;
 // after that it is only hidden, and keeps whatever was moved on it.
+// Every line to and from the micro:bit, in the console. Lives in
+// ubitwebusb.js (serialLog); this only flips the switch and says so, since a
+// console-only feature with no sign it is on is a feature nobody finds twice.
+function toggleSerialDebug() {
+  DEBUG_SERIAL = !DEBUG_SERIAL;
+  say(`micro:bit serial log ${DEBUG_SERIAL ? "on" : "off"} - see the browser console`);
+  if (DEBUG_SERIAL) {
+    console.log(`micro:bit serial log ON. Every line sent and received is printed here.`);
+    serialLogCommands();
+  }
+  return false;
+}
+
 function toggleSoundDebug() {
   DEBUG_SOUND = !DEBUG_SOUND;
 
