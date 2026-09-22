@@ -122,8 +122,13 @@ function buildUI() {
   ui.editor = createButton("open MIDI editor").mousePressed(() => setPage("EDITOR"));
   ui.fullscreen = createButton(FULLSCREEN_LABEL[0]).mousePressed(toggleFullscreen);
   ui.highscores = createButton("highscores").mousePressed(() => setPage("HIGHSCORES"));
-  ui.hex = createA("https://makecode.microbit.org/_5F62ug11KMCc",
-    "get the hex file for your micro:bit", "_blank");
+  // The file itself, which sits next to index.html, rather than the MakeCode
+  // project: saving it and dragging it onto the MICROBIT drive is the whole
+  // job. `download` makes it save instead of opening a megabyte of hex as text
+  // in a tab, and names the saved file - the %20 is only in the address, the
+  // file keeps its space. It only works same-origin, which this is.
+  ui.hex = createA("conductor%20gamemaster.hex", "get the hex file for your micro:bit");
+  ui.hex.attribute("download", "conductor gamemaster.hex");
 
   ui.back = createButton("back to songs").mousePressed(stopAndExit);
   ui.restart = createButton("restart").mousePressed(() => startSong(currentSong));
@@ -352,10 +357,16 @@ const HIGHSCORE_BACKDROP_PAGES = ["END", "HIGHSCORES"];
 // score, not to the song that just finished.
 const PLAYING_PAGES = ["GAME", "PAUSE", "END"];
 
-// A backdrop is a video or a shader, and the extension is what says which.
-// A shader is a fragment shader in Shadertoy's dialect - see shaderbg.js.
+// A backdrop is a video, a shader or a still image, and the extension is what
+// says which. A shader is a fragment shader in Shadertoy's dialect - see
+// shaderbg.js. Anything that is neither of the other two is taken for a video,
+// which is what a blob: url out of a dropped zip always is.
 function isShaderSource(src) {
   return /\.(txt|glsl|frag|fs)$/i.test(src || "");
+}
+
+function isImageSource(src) {
+  return /\.(jpe?g|png|webp|gif|avif)$/i.test(src || "");
 }
 
 // Where a song's `"video"` points. A bare name lives in BG_VIDEO_DIR, or in
@@ -376,6 +387,8 @@ const Backdrop = {
   visible: false,
   src: "",          // what is loaded now, to avoid reloading it
   shader: false,    // whether `src` is a shader rather than a video
+  img: null,        // the element a still image is shown in
+  isImage: false,   // whether `src` is a still image
   look: null,       // dim + grade in force, which the debug panel edits live
   page: "",         // the page it was last told about, to spot what changed
   fade: 1,          // 0 washed out completely, 1 the look's own dim
@@ -407,11 +420,23 @@ const Backdrop = {
     dim.id = "backdrop-dim";
     dim.style.background = `rgb(${COLORS.bg[0]}, ${COLORS.bg[1]}, ${COLORS.bg[2]})`;
 
+    // A still image gets an element of its own rather than being a video's
+    // poster: a poster only shows while a video is loading, and a video with
+    // nothing to play reports itself not ready - which would have the
+    // canvases paint straight over it.
+    const img = document.createElement("img");
+    img.id = "backdrop-image";
+    img.alt = "";
+    img.decoding = "async";
+    img.style.objectFit = BG_IMAGE_FIT === "cover" ? "cover" : "contain";
+
     video.style.display = "none";
+    img.style.display = "none";
     dim.style.display = "none";
 
-    document.body.append(video, dim);
+    document.body.append(video, img, dim);
     this.video = video;
+    this.img = img;
     this.dim = dim;
     // Seeded for whatever page is up, so applyLook() below has something real
     // to write. onPage() sets it properly a moment later, but build() must not
@@ -491,6 +516,7 @@ const Backdrop = {
     // On both, because only one of them is ever showing and this way neither
     // can be left wearing the last backdrop's grade.
     this.video.style.filter = grade;
+    this.img.style.filter = grade;
     if (ShaderBackdrop.canvas) ShaderBackdrop.canvas.style.filter = grade;
   },
 
@@ -591,6 +617,7 @@ const Backdrop = {
 
     this.visible = !!src;
     this.shader = isShaderSource(src);
+    this.isImage = !this.shader && isImageSource(src);
     const moving = this.visible && next !== "PAUSE";
 
     if (src !== this.src) {
@@ -599,6 +626,9 @@ const Backdrop = {
       // so showing() reports false until the new backdrop has something of its
       // own to show. That is what keeps a swap from flashing the last song's
       // backdrop under the new one.
+      // Whichever two are not wanted let go of what they had, so nothing
+      // from the last backdrop can be left showing underneath the new one.
+      if (!this.isImage) this.img.removeAttribute("src");
       if (this.shader) {
         this.video.pause();
         this.video.removeAttribute("src");
@@ -612,6 +642,11 @@ const Backdrop = {
           ShaderBackdrop.show(ok && this.visible && this.shader);
           if (ok && moving) ShaderBackdrop.start();
         });
+      } else if (this.isImage) {
+        ShaderBackdrop.stop();
+        this.video.pause();
+        this.video.removeAttribute("src");
+        this.img.src = src;
       } else {
         ShaderBackdrop.stop();
         if (src) this.video.src = src;
@@ -628,7 +663,8 @@ const Backdrop = {
     this.applyLook();
     BackdropPanel.refresh();
 
-    this.video.style.display = (this.visible && !this.shader) ? "block" : "none";
+    this.video.style.display = (this.visible && !this.shader && !this.isImage) ? "block" : "none";
+    this.img.style.display = (this.visible && this.isImage) ? "block" : "none";
     ShaderBackdrop.show(this.visible && this.shader && !!ShaderBackdrop.program);
     this.dim.style.display = this.visible ? "block" : "none";
 
@@ -637,6 +673,8 @@ const Backdrop = {
       // is what a paused game should look like.
       if (moving) ShaderBackdrop.start();
       else ShaderBackdrop.stop();
+    } else if (this.isImage) {
+      // Nothing to run. It holds still because it is still.
     } else if (moving) {
       // play() hands back a promise that rejects if the browser is not
       // convinced this is allowed. By the time a song is running it always
@@ -657,6 +695,9 @@ const Backdrop = {
   showing() {
     if (!this.visible) return false;
     if (this.shader) return ShaderBackdrop.ready();
+    // Loaded, and decoded to something with a size - a missing file finishes
+    // loading too, just with nothing in it.
+    if (this.isImage) return this.img.complete && this.img.naturalWidth > 0;
     return !!this.video && this.video.readyState > 0;
   }
 };
@@ -890,6 +931,8 @@ const BackdropPanel = {
 function setPage(next) {
   page = next;
   if (next !== "STAGE_SELECT") { hoveredCard = -1; hoveredInfo = -1; }
+  // Back on the menu from calibrating: put the drawer back the way it was.
+  if (next === "STAGE_SELECT") TimingDrawer.release("calibration");
   applyPageUI();
   Backdrop.onPage(next);
 
@@ -1478,6 +1521,12 @@ function setupDragAndDrop() {
 async function startSong(song) {
   if (!song) return;
   currentSong = song;
+
+  // Calibrating is setting the timing, so the timing sliders come up with it
+  // rather than waiting to be found - its backdrop has arrows pointing at
+  // them. Done first, before the audio starts, so the drawer is open by the
+  // time anyone looks down.
+  if (song.id === "calibration") TimingDrawer.hold("calibration");
 
   await AudioEngine.start();
   applySongSounds(song);

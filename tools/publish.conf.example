@@ -1,0 +1,21 @@
+# Copy to tools/publish.conf and fill in. publish.conf stays on this computer
+# (it is never copied into site/, and .gitignore keeps it out of git). No
+# password goes in here: publish.sh asks for it each time, or uses your SSH key
+# if SFTP_KEY=yes.
+#
+# The SFTP details are in the one.com control panel, under SSH & SFTP.
+
+SFTP_HOST=ssh.captaincredible.com
+SFTP_USER=captaincredible.com
+
+# The folder the game goes in, as seen when you log in over SFTP. Give it a
+# folder of its own; the address becomes captaincredible.com/<folder>/.
+# Case matters on the server: MBOH2BETA and mboh2beta are different folders.
+REMOTE_DIR=/www/MBOH2BETA
+
+# The folder for the standalone highscore page (highscore/ in this project).
+# Leave empty to publish only the game. Must not be REMOTE_DIR or inside it.
+HIGHSCORE_DIR=
+
+# yes = log in with your SSH key (added in the one.com control panel)
+SFTP_KEY=no

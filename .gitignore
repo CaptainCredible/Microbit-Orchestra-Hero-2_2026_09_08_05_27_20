@@ -7,3 +7,7 @@ OldHighscores
 
 # Firebase CLI logs, if the emulators are ever run from here
 *-debug.log
+
+# The publish tool's build output and its connection settings (see tools/)
+site/
+tools/publish.conf

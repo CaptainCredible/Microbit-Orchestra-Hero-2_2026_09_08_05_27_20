@@ -24,6 +24,35 @@ Opening `index.html` straight off disk mostly works: the built-in songs are
 rebuilt in memory when `fetch` is blocked, and drag-and-drop still works. But
 the micro:bit will not connect, so use the server.
 
+## Publishing it
+
+    tools/publish.sh              # from the project folder, the one above v2/
+
+Or in VS Code: ⌘⇧P → *Run Task* → *Publish to website*.
+
+It builds `site/` from `v2/` and `highscore/` and uploads only what changed,
+over SFTP (needs `lftp`: `brew install lftp`). The server details are in
+`tools/publish.conf`, which stays on this computer and out of git; the template
+is `tools/publish.conf.example`. It asks for the password each time, or uses
+your SSH key if `SFTP_KEY=yes`.
+
+- `REMOTE_DIR` is where the game goes - `/www/MBOH2BETA` for
+  captaincredible.com/MBOH2BETA. Case matters on the server.
+- `HIGHSCORE_DIR` is where the standalone highscore page goes. Empty means
+  only the game is published. It has to be a folder of its own, not inside the
+  game's.
+- `tools/publish.sh game` or `tools/publish.sh highscore` publishes just one.
+
+Only what `tools/build-site.py` lists goes up, so a new file in `v2/` stays on
+this computer until it is added there. Off the site: the README, the Firestore
+rules, `audioOLD.js`, the unused `images/`, the highscore import tool and the
+songs script. Before anything is uploaded it stops if `songs/songs.json` is out
+of date, or if `index.html` loads a file the list leaves out.
+
+Nothing is ever deleted from the server unless you ask: files that have left
+the site stay there until `tools/publish.sh --delete`, which lists them first
+and asks before removing any.
+
 ## Adding a song
 
 A song is a **folder** under `songs/`, with one `.mid` per part — because
@@ -649,8 +678,8 @@ behaviour the title section describes, just measured against a taller
 `others` now that the buttons sit above the cards rather than trailing them.
 
 **Calibration is a button, not a card.** `songs.js` still defines it as a
-real built-in song — kick on every beat, nothing else, for dialling in the
-micro:bit offset slider — fetched and parsed exactly like the others, so
+real built-in song — kick and snare taking turns, one per beat, so the
+micro:bit sees A, B, A, B, for dialling in the offset slider — fetched and parsed exactly like the others, so
 `calibrate` starts it through the ordinary `startSong()` path. It just does
 not appear in the song list: `songCards()` is `stageList` with the
 calibration entry filtered out, and it is the one thing every place that
@@ -1124,9 +1153,15 @@ sound.
 The two rig-calibration controls live in the timing drawer along the bottom,
 and both are live while playing:
 
-- **micro:bit offset** shifts only the hardware messages, from -500 to +500 ms.
-  Negative fires ahead of the sound, to cover radio and solenoid travel time.
-  The **Calibration** song is a bare kick on every beat for dialling this in.
+- **micro:bit offset** shifts only the hardware messages, from 0 to 200 ms
+  (`MICROBIT_OFFSET_RANGE`, default 100). Positive fires the hardware later
+  than the audible hit.
+  The **Calibration** song alternates kick and snare (A, B, A, B) for dialling
+  this in. Alternating, not a kick on every beat: with every beat identical,
+  an offset a whole beat out looks just as lined up as a correct one, because
+  the eye pairs each flash with the nearest note. A-B only repeats every two
+  beats, so the only way it lines up is the right way. What plays is
+  `songs/calibration/Drums.mid`; the pattern in `songs.js` is the fallback.
 - **visual offset** nudges the boxes against the audio without touching either
   clock.
 Everything about the sound itself is in the panel described above.

@@ -13,6 +13,7 @@ const TimingDrawer = {
   root: null,
   open: false,
   readouts: {},
+  heldBy: null,     // who opened it on the player's behalf - see hold()
 
   build(sliders) {
     if (this.root) return;
@@ -23,7 +24,7 @@ const TimingDrawer = {
 
     const handle = document.createElement("button");
     handle.id = "td-handle";
-    handle.onclick = () => this.toggle();
+    handle.onclick = () => { this.heldBy = null; this.toggle(); };
     root.appendChild(handle);
 
     const body = document.createElement("div");
@@ -31,7 +32,7 @@ const TimingDrawer = {
 
     const rows = [
       { key: "microbitOffset", label: "radio delay",
-        hint: "sent to the micro:bit this much after the sound — negative fires early, to cover radio and solenoid travel" },
+        hint: "sent to the micro:bit this much after the sound, so its flashes line up with the game's" },
       { key: "visualOffset", label: "visual offset",
         hint: "nudges the boxes against the audio without touching either clock" }
     ];
@@ -68,9 +69,33 @@ const TimingDrawer = {
   },
 
   toggle() {
-    this.open = !this.open;
+    this.setOpen(!this.open);
+  },
+
+  setOpen(on) {
+    if (!this.root) return;
+    this.open = !!on;
     this.root.className = this.open ? "td-open" : "td-closed";
     this.refresh();
+  },
+
+  // Opened by something other than the player - calibration - which will want
+  // it closed again when it is done, but only if it was the one that opened
+  // it. So it is only marked held if it was actually shut: a drawer the
+  // player already had open is theirs, and stays open afterwards.
+  hold(who) {
+    if (this.open) return;
+    this.heldBy = who;
+    this.setOpen(true);
+  },
+
+  // Closed again, if `who` is still holding it. Touching the handle in
+  // between hands it back to the player - the handle's click clears
+  // `heldBy` - so a drawer they reopened on purpose is never shut on them.
+  release(who) {
+    if (this.heldBy !== who) return;
+    this.heldBy = null;
+    this.setOpen(false);
   },
 
   refresh() {

@@ -59,8 +59,17 @@ function buildSongs() {
   const songs = [];
 
   //////////////////////////////////////////////////////////////////
-  // 1. CALIBRATION - kick on every beat, nothing else.
+  // 1. CALIBRATION - kick and snare taking turns, one per beat.
   // Use this one to dial in the micro:bit offset slider.
+  //
+  // Alternating rather than a kick on every beat, because with every beat the
+  // same an offset a whole beat out looks exactly as right as one that is
+  // spot on - the eye matches the flash to the NEAREST note, not the right
+  // one. A-B-A-B only repeats every two beats (1.2s at 100 bpm), well past
+  // anything the slider can reach, so the only way it lines up is correctly.
+  //
+  // This is the fallback. What normally plays is songs/calibration/Drums.mid,
+  // which holds the same pattern and has to be kept in step with it.
   //////////////////////////////////////////////////////////////////
   {
     const bpm = 100;
@@ -71,9 +80,10 @@ function buildSongs() {
       // (fetch -> parse -> score) stay the same, so it is still a real song
       // with a real score by the time the button can start it.
       name: "Calibrate",
-      blurb: "Kick on every beat. Nothing else. Use it to dial in the offset slider.",
+      blurb: "A and B taking turns on the beat. Use it to dial in the offset slider.",
       bpm,
-      notes: steps("X...x...x...x...", "kick", bpm, 16, 0)
+      notes: steps("X.......x.......", "kick", bpm, 16, 0)
+        .concat(steps("....x.......x...", "snare", bpm, 16, 0))
     });
   }
 

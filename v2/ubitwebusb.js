@@ -74,182 +74,143 @@ function uBitEventHandler(reason, device, data) {
  * based on bsievers library https://github.com/bsiever/microbit-webusb
  * JavaScript functions for interacting with micro:bit microcontrollers over WebUSB
  * (Only works in Chrome browsers;  Pages must be either HTTPS or local)
- * (ONLY WORKS WITH MICROBIT V2.0 AND EARLIER)
+ *
+ * The transport is DAPjs (dap.umd.js, loaded by index.html just before this
+ * file), as in Bill's own "Updated to DAP.js / support for v2.2". The old one
+ * spoke raw HID control transfers to a hardcoded interface 4, which the DAPLink
+ * firmware on V2.21 boards no longer exposes - so it only ever worked on V2.00.
+ * Ported from /Users/daniel/p5js-webstepseq/ubitwebusb.js, tested there.
  */
-
-// Add a delay() method to promises 
-// NOTE: I found this on-line somewhere but didn't note the source and haven't been able to find it!
-Promise.delay = function(duration){
-    return new Promise(function(resolve, reject){
-        setTimeout(function(){
-            resolve();
-        }, duration)
-    });
-}
 
 const MICROBIT_VENDOR_ID = 0x0d28
 const MICROBIT_PRODUCT_ID = 0x0204
-const MICROBIT_DAP_INTERFACE = 4
 
-const controlTransferGetReport = 0x01
-const controlTransferSetReport = 0x09
-const controlTransferOutReport = 0x200
-const controlTransferInReport = 0x100
-
-const uBitBadMessageDelay = 500         // Delay if message failed
-const uBitIncompleteMessageDelay = 150  // Delay if no message ready now
-const uBitGoodMessageDelay = 20         // Time to try again if message was good
-
-const DAPOutReportRequest = {
-    requestType: "class",
-    recipient: "interface",
-    request: controlTransferSetReport,
-    value: controlTransferOutReport,
-    index: MICROBIT_DAP_INTERFACE
-}
-
-const DAPInReportRequest =  {
-    requestType: "class",
-    recipient: "interface",
-    request: controlTransferGetReport,
-    value: controlTransferInReport,
-    index: MICROBIT_DAP_INTERFACE
-}
-
-let connnectedDevice;
 let CONSOLE_LOG = false;
 let LOG_ALL_DATA = false;
 
 /*
-   Open and configure a selected device and then start the read-loop
+   Open and configure a selected device and then start the serial read
  */
-function uBitOpenDevice(device, callback) {
-    let buffer=""                               // Buffer of accumulated messages
-    let decoder = new TextDecoder("utf-8")      // Decoder for byte->utf conversion
-    const parser = /([^.:]*)\.*([^:]+|):(.*)/   // Parser to identify time-series format (graph:info or graph.series:info)
+async function uBitOpenDevice(device, callback) {
+    const transport = new DAPjs.WebUSB(device)
+    const target = new DAPjs.DAPLink(transport)
+    try {
+        await target.connect()
+        await target.setSerialBaudrate(115200)
+    } catch (error) {
+        // sketch.js's onMicrobitEvent already treats this as "not connected"
+        callback("connection failure", device, error)
+        return
+    }
+    device.target = target;   // Store the target in the device object (needed for write)
+    device.callback = callback // Store the callback for the device
+    callback("connected", device, null)
 
-    let transferLoop = function () {
-        device.controlTransferOut(DAPOutReportRequest, Uint8Array.from([0x83])) // DAP ID_DAP_Vendor3: https://github.com/ARMmbed/DAPLink/blob/0711f11391de54b13dc8a628c80617ca5d25f070/source/daplink/cmsis-dap/DAP_vendor.c
-          .then(() => device.controlTransferIn(DAPInReportRequest, 64))
-          .then((data) => { 
-            if (data.status != "ok") {
-                return Promise.delay(uBitBadMessageDelay).then(transferLoop);
-            }
-            // First byte is echo of get UART command: Ignore it
-
-            let arr = new Uint8Array(data.data.buffer)
-            if(arr.length<2)  // Not a valid array: Delay
-                return Promise.delay(uBitIncompleteMessageDelay).then(transferLoop)
-
-            // Data: Process and get more
-            let len = arr[1]  // Second byte is length of remaining message
-            if(len==0) // If no data: Delay
-                return Promise.delay(uBitIncompleteMessageDelay).then(transferLoop)
-            
-            let msg = arr.slice(2,2+len)  // Get the actual UART bytes
-            let string =  decoder.decode(msg);
-            buffer += string;
-            let firstNewline = buffer.indexOf("\n")
-            while(firstNewline>=0) {
-                let messageToNewline = buffer.slice(0,firstNewline)
-                let now = new Date() 
-                // Deal with line
-                // If it's a graph/series format, break it into parts
-                let parseResult = parser.exec(messageToNewline)
-                if(parseResult) {
-                    let graph = parseResult[1]
-                    let series = parseResult[2]
-                    let data = parseResult[3]
-                    let callbackType = "graph-event"
-                    // If data is numeric, it's a data message and should be sent as numbers
-                    if(!isNaN(data)) {
-                        callbackType = "graph-data"
-                        data = parseFloat(data)
-                    }
-                    // Build and send the bundle
-                    let dataBundle = {
-                        time: now,
-                        graph: graph, 
-                        series: series, 
-                        data: data
-                    }
-                    callback(callbackType, device, dataBundle)
-                } else {
-                    // Not a graph format.  Send it as a console bundle
-                    let dataBundle = {time: now, data: messageToNewline}
-                    callback("console", device, dataBundle)
+    let lineParser = () => {
+        let firstNewline = buffer.indexOf("\n")
+        if(firstNewline>=0) {
+            let messageToNewline = buffer.slice(0,firstNewline)
+            let now = new Date()
+            // Deal with line
+            // If it's a graph/series format, break it into parts
+            let parseResult = parser.exec(messageToNewline)
+            if(parseResult) {
+                let graph = parseResult[1]
+                let series = parseResult[2]
+                let data = parseResult[3]
+                let callbackType = "graph-event"
+                // If data is numeric, it's a data message and should be sent as numbers
+                if(!isNaN(data)) {
+                    callbackType = "graph-data"
+                    data = parseFloat(data)
                 }
-
-                buffer = buffer.slice(firstNewline+1)  // Advance to after newline
-                firstNewline = buffer.indexOf("\n")    // See if there's more data
+                // Build and send the bundle
+                let dataBundle = {
+                    time: now,
+                    graph: graph,
+                    series: series,
+                    data: data
+                }
+                callback(callbackType, device, dataBundle)
+            } else {
+                // Not a graph format.  Send it as a console bundle
+                let dataBundle = {time: now, data: messageToNewline}
+                callback("console", device, dataBundle)
             }
-            // Delay long enough for complete message
-            return Promise.delay(uBitGoodMessageDelay).then(transferLoop);
-        })
-        // Error here probably means micro:bit disconnected
-        .catch(error => { if(device.opened) callback("error", device, error); device.close(); callback("disconnected", device, null);});
+            buffer = buffer.slice(firstNewline+1)  // Advance to after newline
+            firstNewline = buffer.indexOf("\n")    // See if there's more data
+            // Schedule more parsing
+            if(firstNewline>=0) {
+                setTimeout(lineParser, 10)
+            }
+        }
     }
 
-    function controlTransferOutFN(data) {
-        return () => { return device.controlTransferOut(DAPOutReportRequest, data) }
-    }
-    
-    device.open()
-          .then(() => device.selectConfiguration(1))
-          .then(() => device.claimInterface(4))
-          .then(controlTransferOutFN(Uint8Array.from([2, 0])))  // Connect in default mode: https://arm-software.github.io/CMSIS_5/DAP/html/group__DAP__Connect.html
-          .then(controlTransferOutFN(Uint8Array.from([0x11, 0x80, 0x96, 0x98, 0]))) // Set Clock: 0x989680 = 10MHz : https://arm-software.github.io/CMSIS_5/DAP/html/group__DAP__SWJ__Clock.html
-          .then(controlTransferOutFN(Uint8Array.from([0x13, 0]))) // SWD Configure (1 clock turn around; no wait/fault): https://arm-software.github.io/CMSIS_5/DAP/html/group__DAP__SWD__Configure.html
-          .then(controlTransferOutFN(Uint8Array.from([0x82, 0x00, 0xc2, 0x01, 0x00]))) // Vendor Specific command 2 (ID_DAP_Vendor2): https://github.com/ARMmbed/DAPLink/blob/0711f11391de54b13dc8a628c80617ca5d25f070/source/daplink/cmsis-dap/DAP_vendor.c ;  0x0001c200 = 115,200kBps
-          .then(() => { callback("connected", device, null); return Promise.resolve()}) 
-          .then(transferLoop)
-          .catch(error => callback("error", device, error))
+    let buffer=""                               // Buffer of accumulated messages
+    const parser = /([^.:]*)\.*([^:]+|):(.*)/   // Parser to identify time-series format (graph:info or graph.series:info)
+    const ws = / *\r\n/g
+    target.on(DAPjs.DAPLink.EVENT_SERIAL_DATA, data => {
+        buffer += data;
+        buffer = buffer.replace(ws, "\n")
+        if(data.includes("\n"))
+            setTimeout(lineParser, 10)
+    });
+    target.startSerialRead(1)
 }
 
 /**
- * Disconnect from a device 
- * @param {USBDevice} device to disconnect from 
+ * Disconnect from a device
+ * @param {USBDevice} device to disconnect from
  */
-function uBitDisconnect(device) {
-    if(device && device.opened) {
-        device.close()
+async function uBitDisconnect(device) {
+    // Can be asked twice for one unplug - the USB disconnect event below and
+    // sketch.js's disconnectMicrobit() - so the callback is taken first and
+    // a second call finds nothing to do.
+    if(!device || !device.callback)
+        return
+    let callback = device.callback
+    device.callback = null
+    try {
+        await device.target.stopSerialRead()
+    } catch(error) {
+        // Failure may mean already stopped
     }
+    try {
+        await device.target.disconnect()
+    } catch(error) {
+        // Failure may mean already disconnected
+    }
+    try {
+        await device.close()
+    } catch(error) {
+        // Failure may mean already closed
+    }
+    // Call the callback with notification of disconnect
+    callback("disconnected", device, null)
+    device.target = null
 }
-
-
-
-
 
 /**
  * Send a string to a specific device
- * @param {USBDevice} device 
+ * @param {USBDevice} device
  * @param {string} data to send (must not include newlines)
  */
 function uBitSend(device, data) {
-    //if(!device.opened)
-  if(!device){
-    console.log(" no device ")
-    return
-  }
-        
-    // Need to send 0x84 (command), length (including newline), data's characters, newline
+    // A send can arrive before connect() has finished, or after an unplug.
+    if(!device || !device.opened || !device.target)
+        return
     let fullLine = data+'\n'
-    let encoded = new TextEncoder("utf-8").encode(fullLine)
-    let message = new Uint8Array(1+1+fullLine.length)
-    message[0] = 0x84
-    message[1] = encoded.length
-    message.set(encoded, 2)
-    device.controlTransferOut(DAPOutReportRequest, message) // DAP ID_DAP_Vendor3: https://github.com/ARMmbed/DAPLink/blob/0711f11391de54b13dc8a628c80617ca5d25f070/source/daplink/cmsis-dap/DAP_vendor.c
+    device.target.serialWrite(fullLine)
 }
 
 
 /**
  * Callback for micro:bit events
- * 
- 
+ *
+
    Event data varies based on the event string:
   <ul>
-   <li>"connection failure": null</li>
+   <li>"connection failure": null, or the error when the device was chosen but would not connect</li>
    <li>"connected": null</li>
    <li>"disconnected": null</li>
    <li>"error": error object</li>
@@ -262,17 +223,27 @@ function uBitSend(device, data) {
  * @param {string} event ("connection failure", "connected", "disconnected", "error", "console", "graph-data", "graph-event" )
  * @param {USBDevice} device triggering the callback
  * @param {*} data (event-specific data object). See list above for variants
- * 
+ *
  */
 
 
 /**
  * Allow users to select a device to connect to.
- * 
+ *
  * @param {uBitEventCallback} callback function for device events
  */
-function uBitConnectDevice(callback) { 
-    navigator.usb.requestDevice({filters: [{ vendorId: MICROBIT_VENDOR_ID, productId: 0x0204 }]})
+function uBitConnectDevice(callback) {
+    navigator.usb.requestDevice({filters: [{ vendorId: MICROBIT_VENDOR_ID, productId: MICROBIT_PRODUCT_ID }]})
         .then(  d => { if(!d.opened) uBitOpenDevice(d, callback)} )
         .catch( () => callback("connection failure", null, null))
+}
+
+// Unplugging the micro:bit. The one listener: only devices this file opened
+// carry a callback, so anything else unplugged is ignored.
+if (navigator.usb) {
+    navigator.usb.addEventListener('disconnect', (event) => {
+        if("device" in event && event.device.callback && (event.device.productName || "").includes("micro:bit")) {
+            uBitDisconnect(event.device)
+        }
+    })
 }

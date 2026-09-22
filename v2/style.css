@@ -46,6 +46,7 @@ html {
    so it cannot steal a press from a button. Both are display: none until a
    playing page turns them on - see Backdrop in sketch.js. */
 #backdrop,
+#backdrop-image,
 #backdrop-shader,
 #backdrop-dim {
   position: fixed;
@@ -59,6 +60,13 @@ html {
 #backdrop {
   z-index: -2;
   object-fit: cover;
+}
+
+/* A still image. Its object-fit is set from BG_IMAGE_FIT in config.js; the
+   black is what shows in the bars when that is "contain". */
+#backdrop-image {
+  z-index: -2;
+  background: #000;
 }
 
 /* The shader canvas. It is rendered at BG_SHADER_SCALE of the window and

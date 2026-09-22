@@ -774,6 +774,18 @@ const BG_VIDEO_DEFAULT = "shaders/plasmaRainbowTunnel.txt";
 // key - see SONG_BACKDROP_KEYS.
 const BG_VIDEO_DIR = "videos/";
 
+// A still image works as a backdrop too - .jpg, .jpeg, .png, .webp, .gif or
+// .avif, named anywhere a video can be. How it fills a screen whose shape is
+// not its own:
+//
+//   "contain"  all of it shows, with bars at the sides or top - for a card with
+//              words or arrows on it, which must not have its edges cut off
+//   "cover"    it fills the screen and its edges are cropped instead - for a
+//              photo or a texture, where no edge matters
+//
+// The bars are black, which disappears against an image on black.
+const BG_IMAGE_FIT = "contain";
+
 // A backdrop can be a shader instead of a video, and the extension decides:
 // .txt, .glsl, .frag or .fs is a fragment shader in GLSL ES 1.00, the WebGL 1
 // dialect. Paste in the "Image" tab of a Shadertoy and it mostly runs.

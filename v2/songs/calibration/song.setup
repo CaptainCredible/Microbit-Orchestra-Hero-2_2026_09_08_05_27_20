@@ -1,9 +1,16 @@
-// The offset-calibration tool, not a song: kick on every beat and nothing
-// else. It keeps the id "calibration", which is what puts it behind its own
-// button on the menu instead of on a card.
+// The offset-calibration tool, not a song: kick and snare taking turns, one
+// per beat - A, B, A, B on the micro:bit. Alternating so that an offset a whole
+// beat out cannot pass for a correct one; see the calibration entry in
+// songs.js. It keeps the id "calibration", which is what puts it behind its
+// own button on the menu instead of on a card.
 {
   "name": "Calibrate",
   "bpm": 100,
-  "blurb": "Kick on every beat. Nothing else. Use it to dial in the offset slider."
+  "blurb": "A and B taking turns on the beat. Use it to dial in the offset slider.",
+  // The instructions, with arrows down to the two sliders - the timing drawer
+  // opens by itself for this one. A path, so it is used as written rather
+  // than looked for in videos/. Undimmed, because it is there to be read.
+  "backdrop": "./CalibrateBackdrop.jpeg",
+  "backdropDim": 0
   // No "sounds" block, so it plays with the defaults from config.js.
 }

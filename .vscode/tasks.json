@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Publish to website",
+      "type": "shell",
+      "command": "tools/publish.sh",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "focus": true, "panel": "dedicated" }
+    },
+    {
+      "label": "Publish to website (also delete removed files)",
+      "type": "shell",
+      "command": "tools/publish.sh --delete",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "focus": true, "panel": "dedicated" }
+    },
+    {
+      "label": "Publish game only",
+      "type": "shell",
+      "command": "tools/publish.sh game",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "focus": true, "panel": "dedicated" }
+    },
+    {
+      "label": "Publish highscore page only",
+      "type": "shell",
+      "command": "tools/publish.sh highscore",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "focus": true, "panel": "dedicated" }
+    }
+  ]
+}
