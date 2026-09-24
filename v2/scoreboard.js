@@ -29,7 +29,9 @@ const Scoreboard = {
   grid: null,
   players: [],     // the data: one { name, score, bonus } per player, score may be null
   rows: [],        // the DOM for each player: { el, name, score, star, rank }
-  statusEl: null,
+  belowEl: null,   // the strip under the panel, holding the size button
+  muteEl: null,    // "mute robots" - the same one the menu has
+  playersEl: null,
   sortEl: null,
   submitted: false,
   location: "",    // where the board was played - one for the whole board
@@ -39,6 +41,14 @@ const Scoreboard = {
   // first. Either way each row keeps its own number and robot name - sorting
   // moves whole rows, it does not shuffle scores between players.
   sorted: false,
+
+  // How many rows are on screen. The board holds SCOREBOARD_PLAYERS of them
+  // and shows this many; the "16 players" button in the footer switches
+  // between the two sizes. A score for a row that is not showing is kept, but
+  // it is not displayed, not ranked, and not submitted - see entries().
+  shown: typeof SCOREBOARD_PLAYERS_SHOWN !== "undefined"
+    ? Math.min(SCOREBOARD_PLAYERS_SHOWN, SCOREBOARD_PLAYERS)
+    : SCOREBOARD_PLAYERS,
 
   // The board outlives a single song. An evening's worth of players is the
   // point of it, so finishing a song - or starting another - leaves the
@@ -80,7 +90,7 @@ const Scoreboard = {
     this.locationEl = document.createElement("input");
     this.locationEl.id = "sb-location";
     this.locationEl.type = "text";
-    this.locationEl.maxLength = 80;
+    this.locationEl.maxLength = SCOREBOARD_LOCATION_MAX;
     this.locationEl.placeholder = "location";
     this.location = loadLocation();
     this.locationEl.value = this.location;
@@ -114,7 +124,7 @@ const Scoreboard = {
       const name = document.createElement("input");
       name.className = "sb-name";
       name.type = "text";
-      name.maxLength = 14;
+      name.maxLength = SCOREBOARD_NAME_MAX;
       name.placeholder = "name";
       name.oninput = () => { this.players[i].name = name.value; this.touched(); };
 
@@ -172,23 +182,125 @@ const Scoreboard = {
     fetchScores.textContent = "get scores from players";
     fetchScores.onclick = () => requestPlayerScores();
 
+    // The same mute as the menu's, because the end of a song is the other
+    // moment you want to talk over the robots - and the board covers the
+    // screen, so the menu's button is not reachable from here.
+    const mute = document.createElement("button");
+    mute.id = "sb-mute";
+    mute.type = "button";
+    // Built lazily, on the first END screen, which can be long after the mute
+    // was switched on - so it starts in whatever state the mute is actually in.
+    mute.textContent = typeof muteLabel === "function" ? muteLabel() : "mute robots";
+    if (typeof robotsAreMuted === "function" && robotsAreMuted()) mute.classList.add("muted-on");
+    mute.onclick = () => { if (typeof toggleRobotsMute === "function") toggleRobotsMute(); };
+    this.muteEl = mute;
+
     const submit = document.createElement("button");
     submit.id = "sb-submit";
     submit.textContent = "submit scores";
     submit.onclick = () => this.submit();
 
-    this.statusEl = document.createElement("span");
-    this.statusEl.className = "sb-status";
-
-    foot.append(back, again, reset, fetchScores, submit, this.statusEl);
+    // No status line of its own: everything this board has to say goes to the
+    // bar along the bottom of the screen, where every other status line is.
+    // See say() below and the notice in sketch.js.
+    foot.append(back, again, reset, mute, fetchScores, submit);
     root.append(head, grid, foot);
     document.body.appendChild(root);
+
+    // Under the panel rather than in it. It changes how big the board is, not
+    // what is on it, so it does not belong among the buttons that act on the
+    // scores - and outside the frame it cannot be mistaken for one of them.
+    //
+    // Its own element, because the panel is centred with a transform and its
+    // height changes with the number of rows; where its bottom edge lands is
+    // only knowable once it is laid out, so place() measures it.
+    const below = document.createElement("div");
+    below.id = "sb-below";
+    below.hidden = true;
+
+    const players = document.createElement("button");
+    players.id = "sb-players";
+    players.type = "button";
+    players.onclick = () => this.togglePlayers();
+    this.playersEl = players;
+
+    below.appendChild(players);
+    document.body.appendChild(below);
+    this.belowEl = below;
+
+    // The panel moves when the window does, and so must what sits under it.
+    window.addEventListener("resize", () => this.place());
+
+    this.applyShown();
     this.root = root;
     this.refresh();
   },
 
-  show() { if (this.root) this.root.hidden = false; this.refresh(); },
-  hide() { if (this.root) this.root.hidden = true; },
+  // Rows past `shown` are hidden rather than removed: they keep whatever has
+  // arrived for them, so pressing the button reveals scores that came in while
+  // the board was small instead of having thrown them away.
+  applyShown() {
+    if (!this.rows.length) return;
+    this.rows.forEach((row, i) => { if (row && row.el) row.el.hidden = i >= this.shown; });
+
+    // Half down each side: five and five at ten players, eight and eight at
+    // sixteen. The grid fills column by column, so the number of rows in a
+    // column is what decides where the break falls - left at a fixed eight it
+    // put ten players eight-and-two.
+    if (this.grid) {
+      this.grid.style.gridTemplateRows = `repeat(${Math.ceil(this.shown / 2)}, auto)`;
+    }
+    if (this.playersEl) {
+      const full = this.shown >= SCOREBOARD_PLAYERS;
+      const waiting = this.hiddenScores();
+      this.playersEl.textContent = full
+        ? `switch to ${SCOREBOARD_PLAYERS_SHOWN} players`
+        : `switch to ${SCOREBOARD_PLAYERS} players` + (waiting ? ` (${waiting} waiting)` : "");
+      this.playersEl.title = full
+        ? "back to the usual size - scores on the rows that go away are kept, but not submitted"
+        : "show every row, including any score that has come in for one that is not on the board";
+      this.playersEl.classList.toggle("sb-waiting", !full && waiting > 0);
+    }
+  },
+
+  // Scores that have arrived for rows the board is not showing.
+  hiddenScores() {
+    return this.players.filter((p, i) => i >= this.shown && p.score !== null).length;
+  },
+
+  togglePlayers() {
+    this.shown = this.shown >= SCOREBOARD_PLAYERS ? SCOREBOARD_PLAYERS_SHOWN : SCOREBOARD_PLAYERS;
+    // Rows appearing or leaving changes what would be sent, so a board that
+    // said "submitted" is no longer the board that was submitted.
+    this.touched();
+    this.applyShown();
+    this.refresh();
+    this.place();
+  },
+
+  show() {
+    if (this.root) this.root.hidden = false;
+    if (this.belowEl) this.belowEl.hidden = false;
+    this.applyShown();
+    this.refresh();
+  },
+
+  hide() {
+    if (this.root) this.root.hidden = true;
+    if (this.belowEl) this.belowEl.hidden = true;
+  },
+
+  // Put the size button just under the panel's bottom edge. Measured rather
+  // than calculated: the panel is centred with a transform, its height follows
+  // the number of rows, and it stops growing at a max-height - so the only
+  // reliable answer is where it actually ended up.
+  place() {
+    if (!this.belowEl || !this.root || this.root.hidden) return;
+    if (typeof this.root.getBoundingClientRect !== "function") return;
+    const r = this.root.getBoundingClientRect();
+    if (!r || !r.height) return;
+    this.belowEl.style.top = Math.round(r.bottom + 10) + "px";
+  },
 
   // Where the panel is on screen, in canvas pixels, for the ember burst to
   // spawn along. null before it is built or while it is hidden - a hidden
@@ -221,7 +333,7 @@ const Scoreboard = {
 
   setName(player, name) {
     if (!this.valid(player)) return false;
-    this.players[player].name = String(name == null ? "" : name).slice(0, 14);
+    this.players[player].name = String(name == null ? "" : name).slice(0, SCOREBOARD_NAME_MAX);
     this.touched();
     return true;
   },
@@ -275,7 +387,11 @@ const Scoreboard = {
     // the board, and a readout updated afterwards is always one message
     // behind - blank for the first score to arrive.
     this.serial.accepted++;
-    this.serial.last = `S${controller} -> ${ROBOT_NAMES[player] || player} = ${score}`;
+    // Said plainly when it lands on a row that is not showing: the board looks
+    // exactly as if nothing arrived, and that is the moment to know otherwise.
+    const hidden = player >= this.shown
+      ? `  (hidden - press "${SCOREBOARD_PLAYERS} players")` : "";
+    this.serial.last = `S${controller} -> ${ROBOT_NAMES[player] || player} = ${score}${hidden}`;
     this.setScore(player, score);
     return { controller, player, score };
   },
@@ -302,8 +418,13 @@ const Scoreboard = {
   // Always in player order, whatever the board is currently sorted by: this
   // is data, and which way somebody happened to leave the screen sorted is
   // not part of it. The receiving end can sort by score itself.
+  // Only the rows on screen. A score for a row the board is not showing is
+  // kept and can be revealed with the "16 players" button, but it is not part
+  // of the board until it is - so it is never submitted, and a row nobody can
+  // see never needs a name typed into it.
   entries() {
     return this.players
+      .slice(0, this.shown)
       .map((p, i) => ({ player: i, robot: ROBOT_NAMES[i] || "", name: p.name.trim(), score: p.score, bonus: !!p.bonus }))
       .filter(e => e.score !== null || e.name !== "");
   },
@@ -389,7 +510,10 @@ const Scoreboard = {
   },
 
   say(message) {
-    if (this.statusEl) this.statusEl.textContent = message;
+    // The bar along the bottom, with every other status line. sketch.js's
+    // say() is a plain function declaration, so it is on `window`; guarded
+    // because the scoreboard is also loaded by tools that have no sketch.
+    if (typeof window !== "undefined" && typeof window.say === "function") window.say(message);
   },
 
   // Submitting and then carrying on typing should not leave "submitted"
@@ -408,7 +532,7 @@ const Scoreboard = {
   ranks() {
     const scored = this.players
       .map((p, i) => ({ i, score: p.score }))
-      .filter(p => p.score !== null)
+      .filter(p => p.score !== null && p.i < this.shown)
       .sort((a, b) => b.score - a.score);
 
     const out = {};
@@ -426,7 +550,7 @@ const Scoreboard = {
   // anyone without a score falls to the bottom in player order rather than
   // being treated as zero - they did not score nothing, they did not play.
   order() {
-    const all = this.players.map((p, i) => i);
+    const all = this.players.map((p, i) => i).slice(0, this.shown);
     if (!this.sorted) return all;
     return all.sort((a, b) => {
       const sa = this.players[a].score, sb = this.players[b].score;
@@ -487,6 +611,11 @@ const Scoreboard = {
     });
 
     if (this.sortEl) this.sortEl.textContent = this.sorted ? "by player" : "sort";
+    // The count of waiting scores lives in the button's label, so a score
+    // arriving out of sight still shows up somewhere.
+    this.applyShown();
+    // Rows come and go, so the panel's bottom edge moves under the button.
+    this.place();
 
     if (this.serialEl) {
       const seen = this.serial.accepted + this.serial.ignored;

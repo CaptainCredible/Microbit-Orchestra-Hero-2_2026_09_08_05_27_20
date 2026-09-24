@@ -193,3 +193,37 @@ function buildSongs() {
 }
 
 const BUILTIN_SONGS = buildSongs();
+
+//////////////////////////////////////////////////////////////////////
+// The ten second one, for testing
+//
+// Deliberately NOT part of buildSongs(): those are the fallback songs, used
+// when nothing can be fetched, and this one has to be there on every path -
+// the whole point is to reach the END screen and the highscore list without
+// sitting through a song first.
+//
+// It only appears on the menu with DEBUG on (⌘⇧D), which songCards() decides,
+// so it can be built every time without ever showing at a performance.
+//
+// Five bars at 120 bpm is 10.0 s, plus whatever the count-in adds.
+//////////////////////////////////////////////////////////////////////
+
+function buildQuickTest() {
+  const bpm = 120;
+  const bars = 5;
+  return {
+    id: "quick-test",
+    name: "Quick Test",
+    // Says on the card what it is, since a card nobody recognises on a menu is
+    // its own small emergency.
+    blurb: "10 seconds, then the scoreboard. Debug only - it is not on the menu with DEBUG off.",
+    bpm,
+    notes: [].concat(
+      steps("X.......x.......", "kick",  bpm, bars, 0),
+      steps("....x.......x...", "snare", bpm, bars, 0),
+      steps("x.x.x.x.x.x.x.x.", "hihat", bpm, bars, 0)
+    )
+  };
+}
+
+const QUICK_TEST_SONG = buildQuickTest();

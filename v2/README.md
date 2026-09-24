@@ -1216,13 +1216,13 @@ not part of it.
 
 ## The scoreboard
 
-When a song ends, the END screen carries a board of sixteen players, numbered
-0..15 — `SCOREBOARD_PLAYERS`, matching the numbering the micro:bit side works
-in, so a score reported for "player 6" needs nothing translated on the way in.
+When a song ends, the END screen carries a board of fifteen players, one row
+per remote that exists — `SCOREBOARD_PLAYERS`. The controllers count from `S1`
+(see `SCORE_CONTROLLER_BASE`), so the rows are `S1`..`S15`.
 It is titled **GREAT JOB**, in the logo's own display face and the same fire.
 
 Each row shows its player number *and* its robot's name, from `ROBOT_NAMES` —
-Ali, Eir, Ina, Una, Per, Alf, Ada, Ela, Eli, Mor, Oda, Ask, Kai, Ida, Kim, Eva.
+Eir, Ina, Una, Per, Alf, Ada, Ela, Eli, Mor, Oda, Ask, Kai, Ida, Kim, Eva.
 Those two are fixed to the row; the box beside them is for whoever is standing
 at that robot right now. Saying "Una got 400" across a noisy room works, and
 "player 3 got 400" does not.
@@ -1307,13 +1307,14 @@ that is not a score line is ignored and returns null, so the game master can
 log whatever else it likes down the same wire.
 
 **`SCORE_CONTROLLER_BASE` is the one thing to check against real hardware.** At
-1, controller `S1` is player 0 — the first robot, Ali. Set it to 0 if the
-controllers count from `S0`. An off-by-one here puts every score on the wrong
+1, controller `S1` is the board's first row — the first robot, Eir — which is
+how the remotes are numbered: their hex files are named "1 Eir", "2 Ina", "3
+Una". Set it to 0 if the controllers ever count from `S0`. An off-by-one here puts every score on the wrong
 robot, and the board looks perfectly plausible while it does.
 
 A controller number the board cannot place is counted and shown rather than
 thrown at — a garbled radio packet must not take the game down mid-song. The
-board's header carries a readout of what the wire last did (`S16 → Eva = 12 ·
+board's header carries a readout of what the wire last did (`S15 → Eva = 12 ·
 1 ignored`), blank until something arrives, because the first question at an
 installation is always whether it is receiving anything at all.
 

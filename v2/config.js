@@ -384,13 +384,15 @@ const POLY_HEADROOM = 24;
 //   S1, 45        S2, 126        S3, 0
 //
 // The number after the S is the *controller* number, and this is what it means
-// on the scoreboard. At 0, controller S0 is player 0 - the first robot, Ali.
-// Set it to 1 if the controllers count from S1 instead.
+// on the scoreboard. At 1, controller S1 is the first row of the board - the
+// first robot, Eir - which is how the remotes are numbered: the hex files are
+// named "1 Eir", "2 Ina", "3 Una" and so on. Set it to 0 if the controllers
+// ever count from S0 instead.
 //
 // Worth checking against the real hardware before an installation: an
 // off-by-one here puts every score on the wrong robot, and the board will look
 // perfectly plausible while it does.
-const SCORE_CONTROLLER_BASE = 0;
+const SCORE_CONTROLLER_BASE = 1;
 
 // Housekeeping sent to the game master, down the same wire the A / B / X of
 // play go down. One letter each, to match the protocol that is already there.
@@ -405,6 +407,19 @@ const SCORE_CONTROLLER_BASE = 0;
 const MICROBIT_RESET_SCORES = "R";
 const MICROBIT_REQUEST_SCORES = "Q";
 
+// Silencing the robots, for talking over. These are not game messages: the
+// game master passes anything it does not recognise to its conductor parser,
+// where "M" mutes the thumpers and "m" unmutes them.
+//
+// Sent again every few seconds while the mute is on, because a robot that was
+// switched on, rebooted or out of range when the button was pressed never
+// heard it - and one robot thumping through a demonstration is the whole
+// problem. Unmuting is a single message: the repeats stop, and anything still
+// muted hears the next "m" or is unmuted by its own reboot.
+const MICROBIT_MUTE = "M";
+const MICROBIT_UNMUTE = "m";
+const MUTE_REPEAT_SECONDS = 2;
+
 // How long a line of feedback stays on the menu before fading out.
 const NOTICE_SECONDS = 3.5;
 
@@ -413,12 +428,34 @@ const NOTICE_SECONDS = 3.5;
 // the same message and which one the firmware sends is not worth a bug.
 const SCORE_LINE = /^\s*[sS]\s*(\d+)\s*[,:; ]\s*(-?\d+(?:\.\d+)?)\s*$/;
 
-// How many players the end-of-game scoreboard has room for, numbered 0..15 -
-// the same count the micro:bit side works in, so a score reported over serial
-// can be addressed by its player number with nothing to translate.
+// The end-of-game scoreboard.
+//
+// SCOREBOARD_PLAYERS is the most rows it can ever have; SCOREBOARD_PLAYERS_SHOWN
+// is how many it starts with, which is the usual size of the orchestra. The
+// "16 players" button on the board switches between the two.
+//
+// A score arriving for a row that is not showing is kept but NOT displayed,
+// and not submitted either - see Scoreboard.entries(). Press the button and it
+// appears, with everything it has already received. Nothing is lost by
+// starting small, so the board stays the size of the room rather than the size
+// of the box of remotes.
+//
+// Controllers count from S1 (see SCORE_CONTROLLER_BASE), so the rows are
+// S1..S16 at full size and S1..S10 as it starts.
 const SCOREBOARD_PLAYERS = 16;
+const SCOREBOARD_PLAYERS_SHOWN = 10;
 
-// The robots' own names, in player order: player 0 is Ali, player 3 is Una.
+// How much text the scoreboard's boxes take. These match what the database
+// will accept, in firebase/firestore.rules - a name is 60 and a location 80 -
+// so nothing typed here can be refused, or silently shortened, on the way out.
+//
+// Real workshop names are long: "Anna Victoria og Carl Oscar og Pappa" is 36
+// characters, and about four in ten entries on the list are over 14 - which is
+// what this used to be, so they were being cut off as they were typed.
+const SCOREBOARD_NAME_MAX = 60;
+const SCOREBOARD_LOCATION_MAX = 80;
+
+// The robots' own names, in board order: the first row is Eir, the third Una.
 // The board shows both, because they are two different things - the robot is
 // the station you played at and never changes, the name in the box beside it
 // is whoever is standing at it right now. Saying "Una got 400" across a noisy
@@ -427,7 +464,11 @@ const SCOREBOARD_PLAYERS = 16;
 // Shorter than SCOREBOARD_PLAYERS is fine - a player past the end of this
 // list simply shows no robot name - but keeping the two the same length is
 // the point.
-const ROBOT_NAMES = ["Ali", "Eir", "Ina", "Una", "Per", "Alf", "Ada", "Ela",
+// The first ten - Eir to Oda - are the ones the board shows to begin with.
+// There is no sixteenth name: that row shows its number and an empty robot
+// column, which is what the scoreboard does for any row past the end of this
+// list. Add one here if a sixteenth robot ever gets a name.
+const ROBOT_NAMES = ["Eir", "Ina", "Una", "Per", "Alf", "Ada", "Ela",
                      "Eli", "Mor", "Oda", "Ask", "Kai", "Ida", "Kim", "Eva"];
 
 // ---- the highscore database ------------------------------------------------

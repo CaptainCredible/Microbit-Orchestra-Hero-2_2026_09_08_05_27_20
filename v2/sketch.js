@@ -119,6 +119,7 @@ function buildUI() {
   // something you play through so much as a tool you run before you do.
   ui.calibrate = createButton("calibrate timing").mousePressed(startCalibration);
   ui.resetScores = createButton("reset player scores").mousePressed(resetPlayerScores);
+  ui.mute = createButton(muteLabel()).mousePressed(toggleRobotsMute);
   ui.editor = createButton("open MIDI editor").mousePressed(() => setPage("EDITOR"));
   ui.fullscreen = createButton(FULLSCREEN_LABEL[0]).mousePressed(toggleFullscreen);
   ui.highscores = createButton("highscores").mousePressed(() => setPage("HIGHSCORES"));
@@ -271,8 +272,8 @@ function drawerHandleBox() {
 
 // One place that decides which controls exist on which page.
 const PAGE_UI = {
-  STAGE_SELECT: ["connect", "disconnect", "calibrate", "resetScores", "editor", "hex",
-                 "highscores", "fullscreen"],
+  STAGE_SELECT: ["connect", "disconnect", "calibrate", "resetScores", "mute", "editor",
+                 "hex", "highscores", "fullscreen"],
   GAME:         [],
   PAUSE:        ["back", "restart", "resume"],
   // Nothing: at the end of a song "back to songs" and "restart" are in the
@@ -307,7 +308,7 @@ function applyPageUI() {
   if (connected) {
     visible.delete("connect");
   } else {
-    ["disconnect", "calibrate", "resetScores"].forEach(k => visible.delete(k));
+    ["disconnect", "calibrate", "resetScores", "mute"].forEach(k => visible.delete(k));
   }
 
   // The editor is a workshop tool, not part of the installation.
@@ -998,6 +999,8 @@ async function loadStageList() {
   // from a bare folder with no server.
   if (!stageList.length) loadFallbackSongs();
 
+  addQuickTestSong();
+
   loading = false;
 }
 
@@ -1259,12 +1262,42 @@ function loadFallbackSongs() {
   }
 }
 
+// The ten second song, for getting to the scoreboard and the highscore list
+// without playing anything. Added however the rest of the list was loaded -
+// from folders or from the built-in fallback - because it is wanted in both
+// cases, and built through the same encode-and-parse path as the fallback
+// songs so it is a real score by the time it is on the list.
+//
+// `debugOnly` is what keeps it off the menu; see songCards().
+function addQuickTestSong() {
+  if (typeof QUICK_TEST_SONG === "undefined") return;
+  if (stageList.some(s => s.id === QUICK_TEST_SONG.id)) return;
+  try {
+    const bytes = encodeType0(QUICK_TEST_SONG);
+    stageList.push({
+      id: QUICK_TEST_SONG.id,
+      name: QUICK_TEST_SONG.name,
+      blurb: QUICK_TEST_SONG.blurb,
+      bpm: QUICK_TEST_SONG.bpm,
+      sounds: null,
+      score: scoreFromArrayBuffer(bytes.buffer, QUICK_TEST_SONG.name),
+      source: "built in",
+      debugOnly: true
+    });
+  } catch (err) {
+    loadError = `could not build the quick test song: ${err.message}`;
+  }
+}
+
 // Calibration has its own button now rather than a card, so every place that
 // lays out or hit-tests the song grid works from this instead of stageList
 // directly - one filter, rather than the same exclusion repeated at each
 // call site.
+//
+// Read fresh every frame, so ⌘⇧D puts the debug-only song on the menu and
+// takes it away again without reloading.
 function songCards() {
-  return stageList.filter(s => s.id !== "calibration");
+  return stageList.filter(s => s.id !== "calibration" && (DEBUG || !s.debugOnly));
 }
 
 // The calibrate button goes through the exact same stageList entry the old
@@ -1838,11 +1871,80 @@ function requestPlayerScores() {
 }
 
 //////////////////////////////////////////////////////////////////////
-// A line of feedback, wherever it will be seen
+// Muting the robots
 //
-// The scoreboard has its own status line and is the thing you are looking at
-// on the END screen. On the menu there is no such place, so the same message
-// goes to a note under the buttons that fades out on its own.
+// For talking over them. The mute is held rather than fired once: see
+// MUTE_REPEAT_SECONDS in config.js for why it is sent again every few
+// seconds while it is on.
+//////////////////////////////////////////////////////////////////////
+
+let robotsMuted = false;
+let lastMuteSentAt = 0;
+
+function muteLabel() {
+  return robotsMuted ? "unmute robots" : "mute robots";
+}
+
+// For the scoreboard, which is built long after this and may be built while
+// the mute is already on. A function rather than the variable itself, because
+// a `let` cannot be read from another script before it is initialised and a
+// function declaration can always be asked whether it exists.
+function robotsAreMuted() {
+  return robotsMuted;
+}
+
+function toggleRobotsMute() {
+  const wanted = !robotsMuted;
+  const sent = commandMicrobit(wanted ? MICROBIT_MUTE : MICROBIT_UNMUTE,
+                               wanted ? "mute robots" : "unmute robots");
+  // Nothing went out, so nothing changed at the other end. Saying "muted"
+  // over a room full of thumping robots is worse than saying nothing.
+  if (!sent) return false;
+  robotsMuted = wanted;
+  lastMuteSentAt = millis();
+  syncMuteButtons();
+  return true;
+}
+
+// Both buttons say the same thing, wherever they are. The menu's is a p5
+// element and the scoreboard's is plain DOM, so each is told in its own way.
+function syncMuteButtons() {
+  if (ui.mute) {
+    ui.mute.html(muteLabel());
+    ui.mute.elt.classList.toggle("muted-on", robotsMuted);
+  }
+  if (typeof Scoreboard !== "undefined" && Scoreboard.muteEl) {
+    Scoreboard.muteEl.textContent = muteLabel();
+    Scoreboard.muteEl.classList.toggle("muted-on", robotsMuted);
+  }
+}
+
+// Called every frame. Quiet on purpose - uBitSend rather than
+// commandMicrobit - because a status line every two seconds would push
+// everything else off the bar and read as though something were wrong.
+function updateRobotMute() {
+  if (!robotsMuted) return;
+  // Unplugged while muted: the robots cannot be reached and are not muted any
+  // more, so the buttons should stop claiming they are.
+  if (connectedDevice == null) {
+    robotsMuted = false;
+    syncMuteButtons();
+    return;
+  }
+  if (millis() - lastMuteSentAt < MUTE_REPEAT_SECONDS * 1000) return;
+  lastMuteSentAt = millis();
+  uBitSend(connectedDevice, MICROBIT_MUTE);
+}
+
+//////////////////////////////////////////////////////////////////////
+// A line of feedback, in one place
+//
+// Every status line goes here - the menu's buttons, the scoreboard's, the
+// micro:bit commands - and is shown in one place rather than each panel
+// keeping a status line of its own. On the playing pages that is the bar
+// along the bottom, beside the rest of the readouts; on the menu, where there
+// is no bar, it is a note under the buttons. Either way it fades out on its
+// own after NOTICE_SECONDS.
 //////////////////////////////////////////////////////////////////////
 
 let notice = "", noticeAt = 0;
@@ -1850,7 +1952,6 @@ let notice = "", noticeAt = 0;
 function say(message) {
   notice = message;
   noticeAt = millis();
-  if (typeof Scoreboard !== "undefined" && Scoreboard.root) Scoreboard.say(message);
 }
 
 function noticeAlpha() {
@@ -1916,6 +2017,7 @@ function drawFrame() {
     soundPanelApplied = true;
   }
   TimingDrawer.refresh();
+  updateRobotMute();
 
   // On the playing pages the 3D layer behind paints the backdrop, so this
   // canvas has to be transparent - and with a backdrop video running it has
@@ -2162,7 +2264,14 @@ function drawHud() {
   // drawer handle in the middle. Whichever comes first.
   const stopAt = Math.min(hintsLeft, handle.left) - HUD_GAP;
 
+  // The notice goes first so a narrow window drops a readout rather than the
+  // thing that was just said - and it is only in the list while it has not
+  // faded, so the readouts get their space back rather than sitting behind a
+  // permanent gap.
+  const noticeFade = noticeAlpha();
   const items = [
+    ...(notice && noticeFade > 0
+      ? [{ text: notice, colour: COLORS.text, alpha: noticeFade }] : []),
     { text: connected ? "micro:bit connected" : "micro:bit not connected",
       colour: connected ? COLORS.good : COLORS.bad },
     { text: currentSong ? currentSong.name : "", colour: COLORS.dim },
@@ -2189,7 +2298,8 @@ function drawHud() {
       text(sep, x, y);
       x += textWidth(sep);
     }
-    fill(item.colour[0], item.colour[1], item.colour[2]);
+    fill(item.colour[0], item.colour[1], item.colour[2],
+         item.alpha === undefined ? 255 : item.alpha);
     text(item.text, x, y);
     x += textWidth(item.text);
     first = false;
@@ -2258,7 +2368,7 @@ function cardLayout() {
   // disconnect. Nothing there at all while disconnected, and the space goes
   // with them rather than being left as a hole.
   const toolsH = connected
-    ? MENU.toolsGap + MENU.btnH * 2 + MENU.btnGap
+    ? MENU.toolsGap + MENU.btnH * 3 + MENU.btnGap * 2
     : 0;
 
   // Everything below the logo has a fixed height; the logo gets what is
@@ -2289,13 +2399,14 @@ function cardLayout() {
   // Under the last card. cardsH already carries one trailing gapY, so
   // toolsGap is measured from there rather than from the card's edge.
   const resetY = y0 + cardsH + MENU.toolsGap;
-  const disconnectY = resetY + MENU.btnH + MENU.btnGap;
+  const muteY = resetY + MENU.btnH + MENU.btnGap;
+  const disconnectY = muteY + MENU.btnH + MENU.btnGap;
 
   return {
     cardW, blockW, rows, top, titleBlockH, connected,
     // connectY and calibrateY are the same slot, named for both readers.
     topBtnY, connectY: topBtnY, calibrateY: topBtnY,
-    resetY, disconnectY, hexY, subtitleY,
+    resetY, muteY, disconnectY, hexY, subtitleY,
     cardH: MENU.cardH, gapY: MENU.gapY,
     x0: (width - blockW) / 2,
     y0,
@@ -2391,6 +2502,7 @@ function positionMenuButtons() {
   if (L.connected) {
     centreInColumn(ui.calibrate, L, L.topBtnY, 128);
     centreInColumn(ui.resetScores, L, L.resetY, 168);
+    centreInColumn(ui.mute, L, L.muteY, 168);
     centreInColumn(ui.disconnect, L, L.disconnectY, 112);
   } else {
     centreInColumn(ui.connect, L, L.topBtnY, 168);

@@ -125,6 +125,19 @@ button:hover {
   border-color: #6b6b8a;
 }
 
+/* Pressed. Lighter again than hover, and moved down a pixel so the press is
+   felt as well as seen - on a projector at the back of a room the colour step
+   alone is easy to miss.
+   The nudge is a transform on purpose: the blinking buttons below animate
+   their background and border, and an animation beats a plain declaration, so
+   a colour change alone would be invisible on those. A transform is not
+   something those keyframes touch, so it shows through. */
+button:active {
+  background: #3d3d52;
+  border-color: #9a9ac0;
+  transform: translateY(1px);
+}
+
 /* "connect micro:bit" while nothing is connected - which is now the only
    control the menu offers in that state, so it is the one thing to look at.
    At an installation nobody reads the small status line at the bottom; the
@@ -134,16 +147,27 @@ button:hover {
    rather than something painted on the canvas, because the buttons are DOM
    elements above both canvases and p5 cannot draw on them. applyPageUI() puts
    it on and takes it off, so it follows the connection rather than a click. */
-button.needs-connection {
+button.needs-connection,
+button.muted-on {
   background: #3a1414;
   color: #ffdcdc;
   border-color: rgb(180, 64, 64);
   animation: connect-blink 1.1s ease-in-out infinite;
 }
 
-button.needs-connection:hover {
+button.needs-connection:hover,
+button.muted-on:hover {
   background: #52201e;
   border-color: rgb(226, 96, 84);
+}
+
+/* Pressing one of the blinking buttons stops the blink for that instant and
+   lands on the bright end of it, so the press reads even mid-animation. */
+button.needs-connection:active,
+button.muted-on:active {
+  animation: none;
+  background: rgb(226, 96, 84);
+  border-color: rgb(255, 170, 150);
 }
 
 @keyframes connect-blink {
@@ -157,7 +181,8 @@ button.needs-connection:hover {
    long as the rig is unplugged - which at a get-in can be a long while. Still
    unmistakably red, just holding still. */
 @media (prefers-reduced-motion: reduce) {
-  button.needs-connection {
+  button.needs-connection,
+  button.muted-on {
     animation: none;
     background: rgb(180, 64, 64);
     border-color: rgb(240, 120, 96);
@@ -539,7 +564,7 @@ a {
   top: 50%;
   transform: translate(-50%, -50%);
   z-index: 11;                    /* over the END overlay the canvas paints */
-  width: min(940px, calc(100vw - 48px));
+  width: min(1180px, calc(100vw - 48px));
   max-height: calc(100vh - 190px); /* clear of the timing drawer at the bottom */
   overflow-y: auto;
   display: flex;
@@ -579,6 +604,10 @@ a {
 
 /* Sixteen rows is too tall for a short window in one column, so they flow
    into two of eight. */
+/* Two columns, filled one down the other. How many rows each column holds is
+   set from the board's current size in applyShown() - half and half - so ten
+   players split five and five, and sixteen split eight and eight. The eight
+   here is only what it looks like before the first applyShown(). */
 #scoreboard .sb-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -589,10 +618,14 @@ a {
 
 #scoreboard .sb-row {
   display: grid;
-  grid-template-columns: 20px 34px 1fr 70px 22px 34px;
+  grid-template-columns: 20px 34px 1fr 58px 22px 34px;
   align-items: center;
   gap: 6px;
 }
+
+/* The rows past the board's current size. `display: grid` above beats the
+   browser's own rule for [hidden], so without this they stay on screen. */
+#scoreboard .sb-row[hidden] { display: none; }
 
 #scoreboard .sb-id {
   color: #6f6f88;
@@ -654,12 +687,31 @@ a {
    submit put the whole width of the footer between them. */
 #scoreboard #sb-fetch { margin-left: auto; }
 
-#scoreboard .sb-status {
-  font-size: 11px;
-  color: #9a9ab5;
-  text-align: right;
-  max-width: 40%;
+/* Under the panel, not in it: the size of the board is not one of the actions
+   on the scores, so it sits outside the frame. Centred the same way the panel
+   is; its `top` is set from the panel's real bottom edge - see place(). */
+#sb-below {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 11;
+  display: flex;
+  justify-content: center;
 }
+#sb-below[hidden] { display: none; }
+
+#sb-below button {
+  font-family: inherit;
+  font-size: 12px;
+  color: #a8a8c0;
+  background: rgba(14, 14, 22, 0.92);
+  border: 1px solid #3a3a4d;
+  border-radius: 6px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+#sb-below button:hover { color: #e9e9f2; border-color: #6b6b8a; }
+#sb-below button:active { background: #24242f; border-color: #9a9ac0; transform: translateY(1px); }
 
 /* What the serial wire last did. Blank until something arrives. */
 #scoreboard .sb-serial {
@@ -675,6 +727,15 @@ a {
 #scoreboard #sb-location { width: 190px; }
 
 /* The bonus star, handed out by hand: a dim outline until it is given. */
+/* The "16 players" button. It lights up when a score has come in for a row
+   the board is not showing - otherwise that score is invisible, and so is the
+   reason to press it. */
+#sb-below .sb-waiting {
+  border-color: #ffb03a;
+  color: #ffd76a;
+  background: rgba(255, 176, 58, 0.14);
+}
+
 #scoreboard .sb-star,
 #scoreboard .sb-star:hover {
   background: none;
