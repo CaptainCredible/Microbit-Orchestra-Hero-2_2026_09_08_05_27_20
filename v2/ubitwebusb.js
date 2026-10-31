@@ -1,86 +1,27 @@
-//adapted and simplified for AHO students
-//based on ubitwebusb.js by Bill Siever https://github.com/bsiever/microbit-webusb
-
-//new funcs
-////////////////////////////////////////////////////////////////////////
-
-let connectBtn;  //the conect button
-let connectedDevice; //variable to store info about the connection
-
-function uBitWriteLine(data){ //simplified send only takes string
-  if(connectedDevice != null){
-  uBitSend(connectedDevice,data);
-  }else{
-    print("device not connxected!");
-  }
-}
-
-function setupuBitSerial(){
-  connectBtn = createButton("connect to microbit");
-  connectBtn.mousePressed(connectuBit); // function to call upon button being clicked
-  connectBtn.position(0,0);
-}
-
-function connectuBit() {
-  uBitConnectDevice(uBitEventHandler);
-}
-
-function disconnectuBit() {
-  uBitDisconnect(connectedDevice);
-}
-
-function uBitEventHandler(reason, device, data) {
-  //console.log("ooh!");
-  switch (reason) {
-      
-    case "connected":
-      if(CONSOLE_LOG) print("connected");
-      connectedDevice = device;
-      connectBtn.hide();
-      break
-      
-    case "disconnected":
-      if(CONSOLE_LOG) print("disconnected");
-      connectedDevice = null;
-      connectBtn.show()
-      break
-        
-    case "console": // we received a string
-      if(LOG_ALL_DATA) {print("Console Data: " + data.data)}
-      if (typeof onReceivedString === 'function') {
-        onReceivedString(data.data);
-      } else {
-        //console.log('The function does not exist.');
-      }
-      break
-      
-    case "graph-data": // we received a value
-      if(CONSOLE_LOG) print(`Graph Data: ${data.data} (for ${data.graph}${data.series.length?" / series "+data.series:""})`)
-      if(typeof onReceivedValue === 'function'){
-        onReceivedValue(data.graph, data.data)  
-      } else {
-        //console.log(data.graph + " = " + data.data)
-      }      
-      break
-  }
-}
-
-//end of new funcs
-////////////////////////////////////////////////////////////////////////
-
-  
-  
 /*
- * based on bsievers library https://github.com/bsiever/microbit-webusb
  * JavaScript functions for interacting with micro:bit microcontrollers over WebUSB
- * (Only works in Chrome browsers;  Pages must be either HTTPS or local)
+ * (Only works in Chrome/Edge;  Pages must be either HTTPS or localhost)
  *
- * The transport is DAPjs (dap.umd.js, loaded by index.html just before this
- * file), as in Bill's own "Updated to DAP.js / support for v2.2". The old one
- * spoke raw HID control transfers to a hardcoded interface 4, which the DAPLink
- * firmware on V2.21 boards no longer exposes - so it only ever worked on V2.00.
- * Ported from /Users/daniel/p5js-webstepseq/ubitwebusb.js, tested there.
+ * Shared by Microbit Orchestra Hero 2 and p5js-webstepseq. The canonical copy
+ * lives in "mBorch repair/web/" - edit it there and run sync.sh, so the two
+ * apps never drift apart again.
+ *
+ * Based on ubitwebusb.js by Bill Siever https://github.com/bsiever/microbit-webusb
+ * The transport is DAPjs (dap.umd.js, must be loaded before this file), as in
+ * Bill's own "Updated to DAP.js / support for v2.2". The old one spoke raw HID
+ * control transfers to a hardcoded interface 4, which the DAPLink firmware on
+ * V2.21 boards no longer exposes - so it only ever worked on V2.00.
+ *
+ * connectedDevice is NOT declared here: each app declares it itself
+ * (let connectedDevice = null) in its sketch.js.
+ *
+ * Two ways to use it:
+ *  - pass your own handler: uBitConnectDevice(myHandler) - Hero does this
+ *  - or use the default one: connect() / send() / uBitWriteLine() - webstepseq
+ *    does this. Incoming lines are passed on to whichever of these the app
+ *    defines: handleUsbData(line) / onReceivedString(line), onReceivedValue(name, value)
  */
+
 
 const MICROBIT_VENDOR_ID = 0x0d28
 const MICROBIT_PRODUCT_ID = 0x0204
@@ -99,7 +40,7 @@ function serialLog(arrow, text, note) {
 }
 
 // The letters this build is really using, printed on connect. See DEBUG_SERIAL
-// in config.js for why that is worth knowing.
+// in Hero's config.js for why that is worth knowing.
 function serialLogCommands() {
   if (typeof DEBUG_SERIAL === "undefined" || !DEBUG_SERIAL) return;
   const reset = typeof MICROBIT_RESET_SCORES !== "undefined" ? MICROBIT_RESET_SCORES : "?";
@@ -122,7 +63,7 @@ async function uBitOpenDevice(device, callback) {
         await target.connect()
         await target.setSerialBaudrate(115200)
     } catch (error) {
-        // sketch.js's onMicrobitEvent already treats this as "not connected"
+        // handlers treat this as "not connected"
         callback("connection failure", device, error)
         return
     }
@@ -191,7 +132,7 @@ async function uBitOpenDevice(device, callback) {
  */
 async function uBitDisconnect(device) {
     // Can be asked twice for one unplug - the USB disconnect event below and
-    // sketch.js's disconnectMicrobit() - so the callback is taken first and
+    // the app's own disconnect - so the callback is taken first and
     // a second call finds nothing to do.
     if(!device || !device.callback)
         return
@@ -278,4 +219,59 @@ if (navigator.usb) {
             uBitDisconnect(event.device)
         }
     })
+}
+
+
+// ---- default handler and helpers -------------------------------------------
+
+// The handler connect() uses. An app with its own handler never runs this.
+function uBitEventHandler(reason, device, data) {
+  switch (reason) {
+    case "connected":
+      if(CONSOLE_LOG) console.log("micro:bit connected");
+      connectedDevice = device;
+      break
+    case "disconnected":
+      if(CONSOLE_LOG) console.log("micro:bit disconnected");
+      connectedDevice = null;
+      break
+    case "connection failure":
+      if(CONSOLE_LOG) console.log("micro:bit connection failure", data);
+      break
+    case "error":
+      if(CONSOLE_LOG) console.log("micro:bit error", data);
+      break
+    case "console": // a line with no colon in it
+      if(LOG_ALL_DATA) console.log("Console Data: " + data.data)
+      if (typeof handleUsbData === "function") handleUsbData(data.data);
+      if (typeof onReceivedString === "function") onReceivedString(data.data);
+      break
+    case "graph-event": // "name:value" where value is not a number
+    case "graph-data":  // "name:value" where value is a number
+      if(LOG_ALL_DATA) console.log(`Graph: ${data.graph} = ${data.data}`)
+      if (typeof onReceivedValue === "function") onReceivedValue(data.graph, data.data);
+      break
+  }
+}
+
+function connect() {
+  uBitConnectDevice(uBitEventHandler);
+}
+
+function disconnect() {
+  uBitDisconnect(connectedDevice);
+  connectedDevice = null
+}
+
+// send a line to the connected micro:bit, if there is one
+function send(data) {
+  if(connectedDevice != null) {
+    uBitSend(connectedDevice, data);
+  } else {
+    serialLog("->", data + "\n", "NOT SENT - no micro:bit connected")
+  }
+}
+
+function uBitWriteLine(data) {
+  send(data);
 }

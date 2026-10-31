@@ -1,4 +1,4 @@
-let controllerNumber = 1
+let controllerNumber = 1 // change per board: player number / rabbit name index (0-15)
 
 let basicMode = false
 let myLedTimer = 0

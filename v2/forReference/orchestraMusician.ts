@@ -1180,8 +1180,12 @@ namespace OrchestraMusician {
         scoreIsLocked = true
         radio.setGroup(84)
         radio.sendValue("S" + playerN, score)
+        led.plotAll()
+        basic.pause(200)
+        basic.clearScreen()
+        basic.showNumber(myScore)
         //radio.setGroup(83)
-        music.playTone(600, 300)
+        //music.playTone(600, 300)
     }
 }
 

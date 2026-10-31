@@ -14,6 +14,7 @@ let loadError = "";
 let loading = false;
 
 let ui = {};
+let connectedDevice = null;   // the micro:bit, once connected (ubitwebusb.js leaves this to the app)
 let microbitCursor = 0;
 let sentCount = 0;
 let lastSent = "";

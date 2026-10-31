@@ -61,6 +61,7 @@ OrchestraMusician.onButtonABHeldFor(1000, function () {
 let wasGameMsg = false;
 
 function handleMessages() {
+
     //first check for game messages
     if (inData[0] == "X") {
         OrchestraMusician.gameMaster("A")
@@ -106,15 +107,14 @@ function handleMessages() {
         hasCleared = false
     } else if (inData[0] == "R") {
         OrchestraMusician.gameMaster("RESET")
-        led.plot(0, 1)
-        led.plot(0, 2)
-        led.plot(0, 3)
+        led.plotAll()
         clearTimer = input.runningTime()
         hasCleared = false
     } else if (inData[0] == "Q") {
         OrchestraMusician.gameMaster("SCORE")
         led.toggleAll()
         clearTimer = input.runningTime()
+        //music.play(music.tonePlayable(Note.C, 200), music.PlaybackMode.UntilDone)
         hasCleared = false
     } else {
         handleConductorMessages(inData)
@@ -240,6 +240,7 @@ function triggerDisplayNote(thisNote: number) {
     hasCleared = false;
     if (playTones) {
         //music.ringTone(440 + (displayNoteNumber * 100))
+        /*
         switch (displayNoteNumber) {
             case 0:
                 BDPLAY()
@@ -254,6 +255,7 @@ function triggerDisplayNote(thisNote: number) {
                 PERCPLAY()
                 break
         }
+        */
     }
 
     if (displayNoteNumber < 2) {
